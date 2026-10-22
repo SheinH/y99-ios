@@ -109,6 +109,10 @@ enum ImageSource {
     case local(Data)
     case remote(path: String)
 
+    var key: String {
+        switch self { case .local: "local"; case .remote(let p): p }
+    }
+
     // whatsup overrides this (e.g. https://j4.crocfolder.com/uploads/); paths are resolved at load time.
     // Remembered across launches, so paths resolve the same way before (or without) a server reply.
     nonisolated(unsafe) static var imagePath = UserDefaults.standard.string(forKey: "imagePath") ?? "https://yesichat.com/uploads/" {
@@ -171,7 +175,7 @@ struct ChatImage: View {
         .fullScreenCover(isPresented: $viewing) {
             if let image { ImageViewer(image: image).zoomTransition(id, zoom) }
         }
-        .task(id: id) { await load() }
+        .task(id: "\(id)|\(source.key)") { await load() }   // reload when the address arrives
     }
 
     private func fitted(_ s: CGSize) -> CGSize {
@@ -208,12 +212,13 @@ struct ChatImage: View {
 
     // Disk first (by message-id key), then the network; downloads are saved under that key.
     private static func fetch(_ path: String, key: String) async -> UIImage? {
-        guard let url = ImageSource.url(for: path) else { return nil }
+        // Disk before resolving the address: a photo we just sent is stored without one until y99 echoes it.
         let file = DiskCache.imageFile(key: key)
         if let data = await Task.detached(operation: { DiskCache.read(file) }).value,
            let img = await decode(data) {
             return img
         }
+        guard !path.isEmpty, let url = ImageSource.url(for: path) else { return nil }
         var req = URLRequest(url: url)
         req.setValue("https://meetyou.me/", forHTTPHeaderField: "Referer") // 403 without it
         guard let (data, resp) = try? await URLSession.shared.data(for: req),

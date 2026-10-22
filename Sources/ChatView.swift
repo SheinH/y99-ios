@@ -407,7 +407,15 @@ struct ChatView: View {
         if persist && seed.isEmpty { Store.current?.save(chat: friend, arr) }
         for o in arr {
             let id = String(describing: o["id"] ?? UUID().uuidString)
-            guard !seen.contains(id) else { continue }
+            if seen.contains(id) {
+                // y99's copy of a photo we stored without an address (sent, then offline): fill it in.
+                if (o["type"] as? String) == "image", let path = o["message"] as? String, !path.isEmpty,
+                   let i = messages.firstIndex(where: { $0.id == id }),
+                   case .remote(let old)? = messages[i].image, old.isEmpty {
+                    messages[i].image = .remote(path: path)
+                }
+                continue
+            }
             guard let text = o["message"] as? String else { continue }
             seen.insert(id)
             let mine = (o["hunter"] as? String) == session.username
