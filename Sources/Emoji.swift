@@ -211,8 +211,17 @@ struct EmojiPlayer: UIViewRepresentable {
 struct MessageText: View {
     let text: String
 
+    // y99 stores messages HTML-escaped; the web undoes exactly these, in this order (deob/app.deob.js ~51572).
+    static func unescape(_ s: String) -> String {
+        s.replacingOccurrences(of: "&amp;", with: "&")
+            .replacingOccurrences(of: "&lt;", with: "<")
+            .replacingOccurrences(of: "&gt;", with: ">")
+            .replacingOccurrences(of: "&quot;", with: "\"")
+            .replacingOccurrences(of: "&#039;", with: "'")
+    }
+
     var body: some View {
-        let pieces = Emoji.pieces(text)
+        let pieces = Emoji.pieces(Self.unescape(text))
         if pieces.allSatisfy({ if case .text = $0 { true } else { false } }) {
             Text(pieces.map { if case .text(let s) = $0 { s } else { "" } }.joined())
         } else {

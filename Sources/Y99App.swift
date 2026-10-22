@@ -37,6 +37,7 @@ struct Y99App: App {
                         Msg(id: "2", text: ":bg_ablobattentionreverse: :bp_b1nzy: :haha: :smile2: :d-smile:", mine: true),
                         Msg(id: "3", text: "twemoji :tp_1f600: :tp_2764: :tp_1f468-1f469-1f467: :tp_1f1fa-1f1f8: :tp_1f44d-1f3fd: done", mine: false),
                         Msg(id: "4", text: "not emoji :nope: :bg_notreal: time 10:30:45 ok", mine: true),
+                        Msg(id: "6", text: "escapes: &quot;hi&quot; &amp; don&#039;t &lt;3 &gt;_&lt;", mine: true),
                         Msg(id: "5", text: "a longer message that wraps across lines :bg_attention: with emoji in the middle :bg_hype: and more words after it\nnew line :haha:", mine: false),
                     ]) }
                 } else if let i = ProcessInfo.processInfo.arguments.firstIndex(of: "-videoPreview"),
