@@ -42,7 +42,9 @@ struct FriendsView: View {
                     ForEach(others) { row($0) }
                 }
             }
-            .navigationTitle("Friends")
+            .navigationTitle("Friends")   // still names the screen (back button, accessibility)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar(removing: .title)
             .navigationDestination(for: String.self) { ChatView(friend: $0) }
             // Tapped notification: open that person's chat.
             .onChange(of: notifier.openChat, initial: true) {
@@ -51,9 +53,15 @@ struct FriendsView: View {
                 path = [who]
             }
             .toolbar {
+                // The title shares the toolbar's row with the buttons (a large title gets a row of its own).
+                if #available(iOS 26, *) {
+                    ToolbarItem(placement: .topBarLeading) { title }.sharedBackgroundVisibility(.hidden)
+                } else {
+                    ToolbarItem(placement: .topBarLeading) { title }
+                }
                 // Until notifications are set up, a visible nudge; afterwards it lives in the account menu.
                 if !PushRelay.isSetUp {
-                    ToolbarItem(placement: .topBarLeading) {
+                    ToolbarItem(placement: .topBarTrailing) {
                         Link(destination: PushRelay.setupURL) { Image(systemName: "bell.badge") }
                             .accessibilityLabel("Set Up Notifications")
                     }
@@ -82,6 +90,10 @@ struct FriendsView: View {
                 Task { await load() }
             }
         }
+    }
+
+    var title: some View {
+        Text("Friends").font(.largeTitle.bold()).fixedSize().accessibilityAddTraits(.isHeader)
     }
 
     func header(_ title: String, _ symbol: String) -> some View {
