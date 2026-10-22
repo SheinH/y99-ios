@@ -53,7 +53,10 @@ struct FriendsView: View {
             .onChange(of: notifier.openChat, initial: true) {
                 guard let who = notifier.openChat else { return }
                 notifier.openChat = nil
-                path = [who]
+                // Straight into the chat, no push animation (shortcut, widget, notification).
+                var t = Transaction()
+                t.disablesAnimations = true
+                withTransaction(t) { path = [who] }
             }
             .toolbar {
                 // The title shares the toolbar's row with the buttons (a large title gets a row of its own).
