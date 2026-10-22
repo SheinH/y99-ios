@@ -607,12 +607,15 @@ extension View {
     }
 }
 
-// Covers the status bar and top bar plus a little below, solid at the top and clear at the bottom.
+// Covers the status bar and top bar plus a little below, darkest at the top and clear at the bottom.
 struct TopFade: View {
     var body: some View {
         GeometryReader { g in
             Color(.systemBackground)
-            .mask(LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: 0.5),
+            // One smooth ramp that never turns opaque, so rows stay faintly readable even behind the status bar.
+            .mask(LinearGradient(stops: [.init(color: .black.opacity(0.75), location: 0),
+                                         .init(color: .black.opacity(0.5), location: 0.45),
+                                         .init(color: .black.opacity(0.2), location: 0.75),
                                          .init(color: .clear, location: 1)], startPoint: .top, endPoint: .bottom))
             .frame(height: g.safeAreaInsets.top + 24)
             .ignoresSafeArea()
