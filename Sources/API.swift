@@ -86,16 +86,25 @@ enum API {
     }
 
     /// Like post(ordered:), but says whether a failed request could have reached the server.
+    /// `progress` gets the fraction of the body sent (0...1), for uploads.
     static func postOutcome(_ path: String, ordered fields: [(String, String)], username: String,
-                            file: File? = nil, timeout: TimeInterval = 15) async -> Outcome {
+                            file: File? = nil, timeout: TimeInterval = 15,
+                            progress: (@Sendable (Double) -> Void)? = nil) async -> Outcome {
         var req = request(path, ordered: fields, username: username, file: file)
         req.timeoutInterval = timeout
-        return await send(req)
+        return await send(req, progress: progress)
     }
 
-    static func send(_ req: URLRequest) async -> Outcome {
+    static func send(_ req: URLRequest, progress: (@Sendable (Double) -> Void)? = nil) async -> Outcome {
         do {
-            let (respData, _) = try await URLSession.shared.data(for: req)
+            let respData: Data
+            if let progress, let body = req.httpBody {
+                var r = req
+                r.httpBody = nil
+                (respData, _) = try await URLSession.shared.upload(for: r, from: body, delegate: UploadProgress(progress))
+            } else {
+                (respData, _) = try await URLSession.shared.data(for: req)
+            }
             let json = try? JSONSerialization.jsonObject(with: respData, options: .allowFragments)
             Captcha.handle(json)
             if let dict = json as? [String: Any] {
@@ -107,6 +116,17 @@ enum API {
             return neverSent.contains(e.code) ? .notSent : .unknown
         } catch {
             return .unknown
+        }
+    }
+
+    /// Reports how much of a request body has been sent.
+    final class UploadProgress: NSObject, URLSessionTaskDelegate, Sendable {
+        let report: @Sendable (Double) -> Void
+        init(_ report: @escaping @Sendable (Double) -> Void) { self.report = report }
+        func urlSession(_ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64,
+                        totalBytesSent: Int64, totalBytesExpectedToSend: Int64) {
+            guard totalBytesExpectedToSend > 0 else { return }
+            report(Double(totalBytesSent) / Double(totalBytesExpectedToSend))
         }
     }
 

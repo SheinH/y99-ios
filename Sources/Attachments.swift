@@ -73,7 +73,8 @@ enum Attachments {
 
     /// Uploads a file and returns its attachment id. The body is written to a temp file so large
     /// videos stream from disk instead of sitting in memory.
-    static func upload(file: URL, filename: String, mime: String) async -> String? {
+    static func upload(file: URL, filename: String, mime: String,
+                       progress: (@Sendable (Double) -> Void)? = nil) async -> String? {
         let boundary = API.webKitBoundary()
         let body = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: body) }
@@ -89,7 +90,8 @@ enum Attachments {
         req.timeoutInterval = 300   // big videos on a slow connection
         req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         browserHeaders(&req)
-        guard let (data, _) = try? await URLSession.shared.upload(for: req, fromFile: body),
+        guard let (data, _) = try? await URLSession.shared.upload(for: req, fromFile: body,
+                                                                  delegate: progress.map { API.UploadProgress($0) }),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
         return obj["attachment"] as? String
     }

@@ -2,7 +2,8 @@ import Foundation
 import UIKit
 
 extension Notification.Name {
-    /// An outbox entry changed. userInfo: id, chat, state (OutboxEntry.State raw value, or "sent"), serverId (Int, when sent).
+    /// An outbox entry changed. userInfo: id, chat, state (OutboxEntry.State raw value, or "sent"), serverId (Int, when
+/// sent), detail (String, optional: the current stage of a photo/video, e.g. "Uploading 42%").
     static let y99Outbox = Notification.Name("y99Outbox")
 }
 
@@ -182,18 +183,21 @@ struct OutboxEntry: Codable, Identifiable {
             outcome = await API.postOutcome("private/upload", ordered: [
                 ("target", e.chat), ("mm", String(Int(Date().timeIntervalSince1970 * 1000))), ("ta", name),
                 ("x", String(e.savedKb ?? 0)), ("auth", auth),
-            ], username: me, file: .init(field: "picture", filename: name, mime: e.mime ?? "image/jpeg", data: data), timeout: 120)
+            ], username: me, file: .init(field: "picture", filename: name, mime: e.mime ?? "image/jpeg", data: data),
+               timeout: 120, progress: stageReporter(e))
         case .video:
             // Upload once; the id is saved before the message is sent, so a retry only resends the message.
             if e.attachmentId == nil {
+                stage(e, "Uploading 0%")
                 guard let url = e.fileURL,
                       let aid = await Attachments.upload(file: url, filename: e.filename ?? url.lastPathComponent,
-                                                         mime: e.mime ?? "application/octet-stream")
+                                                         mime: e.mime ?? "application/octet-stream", progress: stageReporter(e))
                 else { return .failed(unconfirmed: false) }
                 e.attachmentId = aid
                 save(e)
                 Attachments.cacheSent(url, as: aid)   // plays offline later without a download
             }
+            stage(e, "Sending…")   // uploaded: only the message pointing at it is left
             let text = "[ATTACHMENT]"
             outcome = await API.postOutcome("private/send", ordered: [("message", text), ("target", e.chat), ("auth", auth)]
                                             + SendTelemetry.fields(message: text, typingSeconds: 0)
@@ -210,6 +214,30 @@ struct OutboxEntry: Codable, Identifiable {
             return .failed(unconfirmed: false)
         case .unknown:
             return .failed(unconfirmed: true)
+        }
+    }
+
+    // MARK: Stages shown under photo/video bubbles
+
+    private func stage(_ e: OutboxEntry, _ detail: String) {
+        NotificationCenter.default.post(name: .y99Outbox, object: nil,
+                                        userInfo: ["id": e.id, "chat": e.chat, "state": OutboxEntry.State.sending.rawValue, "detail": detail])
+    }
+
+    /// Upload progress → "Uploading N%" (whole percents only), then "Processing…" once every byte is up
+    /// and y99 hasn't answered yet.
+    private func stageReporter(_ e: OutboxEntry) -> @Sendable (Double) -> Void {
+        let id = e.id, chat = e.chat
+        nonisolated(unsafe) var last = -1
+        return { fraction in
+            let pct = Int(fraction * 100)
+            guard pct != last else { return }
+            last = pct
+            let detail = pct >= 100 ? "Processing…" : "Uploading \(pct)%"
+            Task { @MainActor in
+                NotificationCenter.default.post(name: .y99Outbox, object: nil,
+                    userInfo: ["id": id, "chat": chat, "state": OutboxEntry.State.sending.rawValue, "detail": detail])
+            }
         }
     }
 

@@ -9,6 +9,7 @@ struct Msg: Identifiable {
     var video: VideoSource? = nil
     var failed = false
     var pending: OutboxEntry.State? = nil   // still in the outbox
+    var detail: String? = nil               // photo/video stage from the outbox, e.g. "Uploading 42%"
     var serverId: Int?   // set once the server accepts it; nil while sending
 }
 
@@ -297,6 +298,9 @@ struct ChatView: View {
                 }
             } else if m.failed {
                 Text("Not Delivered").font(.caption).foregroundStyle(.red)
+            } else if m.pending != nil, m.image != nil || m.video != nil {
+                // Every unsent photo/video shows its own stage, not just the newest message.
+                Text(m.detail ?? status(m)).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
             } else if showStatus {
                 Text(status(m)).font(.caption).foregroundStyle(.secondary)
             }
@@ -484,6 +488,7 @@ struct ChatView: View {
             if n > lastId { lastId = n }
         } else if let raw = info["state"] as? String {
             messages[i].pending = OutboxEntry.State(rawValue: raw)
+            messages[i].detail = info["detail"] as? String
         }
     }
 

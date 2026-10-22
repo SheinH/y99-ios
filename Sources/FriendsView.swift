@@ -80,15 +80,17 @@ struct FriendsView: View {
             .accessibilityElement(children: .combine)
             .accessibilityValue(friend.statusText)
         }
-        .contextMenu {
-            let fav = favorites.contains(friend.username)
-            Button {
-                Store.current?.setFavorite(friend.username, !fav)
-                favorites = Store.current?.favorites() ?? []
-            } label: {
-                Label(fav ? "Remove from Favorites" : "Add to Favorites", systemImage: fav ? "star.slash" : "star")
-            }
+        // Long press toggles the favorite (no menu: it's the only thing to do with a friend).
+        .simultaneousGesture(LongPressGesture(minimumDuration: 0.5).onEnded { _ in toggleFavorite(friend.username) })
+        .accessibilityAction(named: favorites.contains(friend.username) ? "Remove from Favorites" : "Add to Favorites") {
+            toggleFavorite(friend.username)
         }
+    }
+
+    func toggleFavorite(_ name: String) {
+        Store.current?.setFavorite(name, !favorites.contains(name))
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        withAnimation { favorites = Store.current?.favorites() ?? [] }
     }
 
     // Shows the stored list right away (works offline), then refreshes from the server.
