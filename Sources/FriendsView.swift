@@ -36,8 +36,8 @@ struct FriendsView: View {
                 let favs = friends.filter { favorites.contains($0.username) }
                 let others = friends.filter { !favorites.contains($0.username) }
                 if !favs.isEmpty {
-                    Section("Favorites") { ForEach(favs) { row($0) } }
-                    Section("Friends") { ForEach(others) { row($0) } }
+                    Section { ForEach(favs) { row($0) } } header: { Label("Favorites", systemImage: "star.fill") }
+                    Section { ForEach(others) { row($0) } } header: { Label("Friends", systemImage: "person.2.fill") }
                 } else {
                     ForEach(others) { row($0) }
                 }
