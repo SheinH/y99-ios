@@ -19,17 +19,15 @@ struct VoicePanel: View {
 
     var recording: some View {
         VStack(spacing: 10) {
-            Text(dictation.preview.isEmpty ? "Listening…" : dictation.preview)
-                .font(.subheadline).italic()
-                .foregroundStyle(.secondary)
-                .lineLimit(2, reservesSpace: true)
-                .truncationMode(.head)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 16).padding(.vertical, 10)
-                .glass(in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-                .accessibilityLabel(dictation.preview.isEmpty ? "Listening" : "Hearing: \(dictation.preview)")
-            HStack(spacing: 8) {
-                circleButton("trash", "Discard recording") { dictation.discard() }
+            // What's been heard, with the timer and level meter under it.
+            VStack(alignment: .leading, spacing: 10) {
+                Text(dictation.preview.isEmpty ? "Listening…" : dictation.preview)
+                    .font(.subheadline).italic()
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2, reservesSpace: true)
+                    .truncationMode(.head)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityLabel(dictation.preview.isEmpty ? "Listening" : "Hearing: \(dictation.preview)")
                 HStack(spacing: 8) {
                     Image(systemName: "circle.fill")
                         .font(.system(size: 9))
@@ -41,11 +39,14 @@ struct VoicePanel: View {
                     LevelMeter(levels: dictation.levels)
                         .frame(height: 26)
                 }
-                .padding(.horizontal, 14)
-                .frame(maxWidth: .infinity, minHeight: 48)
-                .glass(in: Capsule())
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("Recording, \(Self.clock(dictation.seconds))")
+            }
+            .padding(.horizontal, 16).padding(.vertical, 12)
+            .glass(in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            HStack(spacing: 10) {
+                circleButton("trash", "Discard recording") { dictation.discard() }
+                Spacer()
                 // Feeling lucky: no review, the transcript goes out as soon as it's ready.
                 Button { dictation.stopAndSend(onSend) } label: {
                     Image(systemName: "arrow.up")
