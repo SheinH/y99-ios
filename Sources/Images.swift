@@ -149,6 +149,8 @@ struct ChatImage: View {
     @Namespace private var zoom
 
     private static let cache = NSCache<NSString, UIImage>()
+    // photo.slash is newer than iOS 18; older systems get the closest older symbol.
+    private static let expiredSymbol = UIImage(systemName: "photo.slash") != nil ? "photo.slash" : "photo.badge.exclamationmark"
     private static let maxSize = CGSize(width: 240, height: 320)
 
     var body: some View {
@@ -161,7 +163,7 @@ struct ChatImage: View {
                     .onTapGesture { viewing = true }
             } else if expired {
                 // Gone for good: a quiet note, not a placeholder box for a picture that will never come.
-                Label("Photo expired", systemImage: "photo")
+                Label("Photo expired", systemImage: Self.expiredSymbol)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .padding(.vertical, 4)
