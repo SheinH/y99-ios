@@ -71,17 +71,24 @@ struct FriendsView: View {
     }
 
     // user/friends -> {friends: [{username, status, ...}]} or {friends: 203} when empty (deob/modules/bKls.js setUserData)
+    // Tap opens the chat, long press toggles the favorite. Both are handled on the row itself (not a
+    // NavigationLink plus an extra gesture, where the list's own touch handling won only some of the time).
     func row(_ friend: Friend) -> some View {
-        NavigationLink(value: friend.username) {
-            HStack(spacing: 12) {
-                Circle().fill(friend.statusColor).frame(width: 10, height: 10)
-                Text(friend.username)
-            }
-            .accessibilityElement(children: .combine)
-            .accessibilityValue(friend.statusText)
+        HStack(spacing: 12) {
+            Circle().fill(friend.statusColor).frame(width: 10, height: 10)
+            Text(friend.username)
+            Spacer()
+            Image(systemName: "chevron.right")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.tertiary)
         }
-        // Long press toggles the favorite (no menu: it's the only thing to do with a friend).
-        .simultaneousGesture(LongPressGesture(minimumDuration: 0.5).onEnded { _ in toggleFavorite(friend.username) })
+        .contentShape(Rectangle())
+        .onTapGesture { path = [friend.username] }
+        .onLongPressGesture(minimumDuration: 0.4) { toggleFavorite(friend.username) }
+        .accessibilityElement(children: .combine)
+        .accessibilityValue(friend.statusText)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { path = [friend.username] }
         .accessibilityAction(named: favorites.contains(friend.username) ? "Remove from Favorites" : "Add to Favorites") {
             toggleFavorite(friend.username)
         }
