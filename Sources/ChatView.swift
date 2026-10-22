@@ -450,17 +450,25 @@ struct ChatView: View {
             let r = await API.post("private/send", ordered: [("message", text), ("target", friend), ("auth", session.auth ?? "")]
                                    + SendTelemetry.fields(message: text, typingSeconds: seconds),
                                    username: session.username)
-            accepted(localId, r)
+            accepted(localId, r, stub: ["message": text])
         }
     }
 
     // Record the server's msg_id on the local message (so status can track it), or mark it failed.
-    func accepted(_ localId: String, _ r: Any?) {
+    /// `stub` holds the message fields we know (text, or type/attachment): with the server's msg_id it's
+    /// stored right away, so the message is in the cache even if we go offline before y99 echoes it back
+    /// (the echo or the next refresh replaces it with y99's own copy).
+    func accepted(_ localId: String, _ r: Any?, stub: [String: Any] = [:]) {
         guard let i = messages.firstIndex(where: { $0.id == localId }) else { return }
         if let dict = r as? [String: Any], dict["delivery"] as? String == "delivered",
            let mid = dict["msg_id"], let n = Int("\(mid)") {
             seen.insert(String(n)) // avoid re-adding when it echoes back
             messages[i].serverId = n
+            if seed.isEmpty {
+                let obj = stub.merging(["id": n, "hunter": session.username, "target": friend,
+                                        "date": Int(Date().timeIntervalSince1970), "delivered": 0, "seen": 0]) { _, new in new }
+                Store.current?.save(chat: friend, [obj])
+            }
         } else {
             messages[i].failed = true
         }
@@ -497,7 +505,7 @@ extension ChatView {
                                + SendTelemetry.fields(message: text, typingSeconds: 0)
                                + [("attachment", "true"), ("attachmentId", aid)],
                                username: session.username)
-        accepted(localId, r)
+        accepted(localId, r, stub: ["type": "attachment", "message": text, "attachmentId": aid])
     }
 
     // Camera: save the shot to the library, then send it straight away.
@@ -517,7 +525,7 @@ extension ChatView {
             "x": String(img.savedKb),
         ], auth: session.auth, username: session.username,
            file: .init(field: "picture", filename: img.filename, mime: img.mime, data: img.data))
-        accepted(localId, r)
+        accepted(localId, r, stub: ["type": "image", "message": ""])
         // Cache our copy as that message's photo right away (private/upload answers with its msg_id).
         if let mid = (r as? [String: Any])?["msg_id"], let n = Int("\(mid)") {
             ImageSource.cacheSent(img.data, messageId: n)
