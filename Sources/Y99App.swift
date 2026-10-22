@@ -88,6 +88,7 @@ struct Y99App: App {
                 Text("You'll get a notification from Y99 Alerts when someone messages you while Y99 is closed.")
             }
             .onAppear {
+                Connectivity.shared.start()
                 if let auth = session.auth {
                     SocketManager.shared.start(auth: auth)
                     Whatsup.shared.start(auth: auth, username: session.username)
@@ -106,6 +107,8 @@ struct Y99App: App {
                 if let o = note.userInfo as? [String: Any] { Notifier.shared.notify(message: o, me: session.username) }
             }
             .onChange(of: phase) {
+                // Ping only while the app is on screen.
+                if phase == .active { Connectivity.shared.start() } else if phase == .background { Connectivity.shared.stop() }
                 guard let auth = session.auth else { return }
                 switch phase {
                 case .background:

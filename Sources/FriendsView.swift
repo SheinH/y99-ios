@@ -28,6 +28,7 @@ struct FriendsView: View {
     @State private var path: [String] = []
     @State private var favorites: Set<String> = []
     @ObservedObject private var notifier = Notifier.shared
+    @ObservedObject private var connectivity = Connectivity.shared   // the toolbar's status badge
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -65,6 +66,9 @@ struct FriendsView: View {
                         Link(destination: PushRelay.setupURL) { Image(systemName: "bell.badge") }
                             .accessibilityLabel("Set Up Notifications")
                     }
+                }
+                if ConnectionBadge.isVisible {
+                    ToolbarItem(placement: .topBarTrailing) { ConnectionBadge() }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {

@@ -105,6 +105,7 @@ enum API {
             } else {
                 (respData, _) = try await URLSession.shared.data(for: req)
             }
+            Connectivity.serverAnswered()
             let json = try? JSONSerialization.jsonObject(with: respData, options: .allowFragments)
             Captcha.handle(json)
             if let dict = json as? [String: Any] {

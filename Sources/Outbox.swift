@@ -142,6 +142,8 @@ struct OutboxEntry: Codable, Identifiable {
                 waitingForCaptcha = true
             case .failed(let unconfirmed):
                 e.state = unconfirmed ? .unconfirmed : (e.state == .unconfirmed ? .unconfirmed : .waiting)
+                // Lost the connection: not the message's fault. It waits for .y99Online without using up a try.
+                if !Connectivity.shared.isOnline { save(e); continue }
                 e.failures += 1
                 if e.failures >= Self.maxFailures { e.state = .failed }
                 save(e)

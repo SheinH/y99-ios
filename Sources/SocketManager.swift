@@ -25,6 +25,26 @@ final class SocketManager: NSObject {
     private var sawPing = false   // only watch for silence once this connection has actually pinged
     private var watchdog: Timer?
 
+    override init() {
+        super.init()
+        NotificationCenter.default.addObserver(forName: .y99Online, object: nil, queue: .main) { [weak self] _ in
+            self?.backOnline()
+        }
+    }
+
+    /// Back online: don't sit out the retry backoff, and replace a connection that went quiet meanwhile
+    /// (it's probably dead without knowing it).
+    private func backOnline() {
+        guard running else { return }
+        if isConnected, Date().timeIntervalSince(lastPing) < 5 { return }
+        DebugLog.log("socket: back online, reconnecting now")
+        isConnected = false
+        task?.cancel(with: .goingAway, reason: nil)
+        task = nil
+        retryDelay = 1
+        connect()
+    }
+
     func start(auth: String) {
         guard !running else { return }   // one socket per account: a second one gets the other logged out
         self.auth = auth
@@ -38,7 +58,7 @@ final class SocketManager: NSObject {
     }
 
     private func checkPing() {
-        guard running, isConnected, sawPing, Date().timeIntervalSince(lastPing) > 15 else { return }
+        guard running, isConnected, sawPing, Connectivity.online, Date().timeIntervalSince(lastPing) > 15 else { return }
         DebugLog.log("socket: no ping for 15 s, reconnecting")
         isConnected = false
         task?.cancel(with: .goingAway, reason: nil)
@@ -106,6 +126,8 @@ final class SocketManager: NSObject {
                 DebugLog.log("socket failed: \(err.localizedDescription)")
                 self.isConnected = false
                 guard self.running else { return }
+                // Offline: no point retrying until the ping says we're back (.y99Online).
+                guard Connectivity.online else { DebugLog.log("socket: offline, waiting"); return }
                 // Back off instead of hammering the server every second.
                 let delay = self.retryDelay
                 self.retryDelay = min(self.retryDelay * 2, 60)
@@ -119,6 +141,7 @@ final class SocketManager: NSObject {
         if cmd == "ping" {
             if !sawPing { DebugLog.log("socket: pings arriving") }
             lastPing = Date(); sawPing = true
+            Connectivity.serverAnswered()
             return
         }
         let sub = (o["dispatch"] ?? o["commit"]).map { " \($0)" } ?? ""

@@ -31,6 +31,7 @@ extension Notification.Name {
     private var interval: Duration = .seconds(2)
     private var inFlight = false
     private var kick = false
+    private var observing = false
 
     // Persisted so a background refresh can echo it too.
     private var haw: String? {
@@ -39,6 +40,12 @@ extension Notification.Name {
     }
 
     func start(auth: String, username: String) {
+        if !observing {
+            observing = true
+            NotificationCenter.default.addObserver(forName: .y99Online, object: nil, queue: .main) { _ in
+                Task { @MainActor in Whatsup.shared.pollNow() }
+            }
+        }
         self.auth = auth
         self.username = username
         pollNow()
@@ -70,6 +77,8 @@ extension Notification.Name {
         loop?.cancel()
         loop = Task {
             while !Task.isCancelled {
+                // Offline: wait for .y99Online (which polls right away) instead of failing every 2 s.
+                if !Connectivity.shared.isOnline { try? await Task.sleep(for: .seconds(3600)); continue }
                 inFlight = true
                 await pollOnce(focused: true)
                 inFlight = false

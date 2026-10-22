@@ -112,6 +112,9 @@ struct ChatView: View {
                 .padding(.leading, 4).padding(.trailing, 10).padding(.vertical, 4)
                 .glass(in: Capsule())
             }
+            if ConnectionBadge.isVisible {
+                ToolbarItem(placement: .topBarTrailing) { ConnectionBadge() }
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .y99Message)) { note in
             guard let o = note.userInfo as? [String: Any],
@@ -187,6 +190,11 @@ struct ChatView: View {
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
                 guard seed.isEmpty else { return }
                 Task { await refreshLatest() }
+            }
+            // Back online: catch up on what arrived meanwhile, a beat after the whatsup poll (no bursts).
+            .onReceive(NotificationCenter.default.publisher(for: .y99Online)) { _ in
+                guard seed.isEmpty else { return }
+                Task { try? await Task.sleep(for: .seconds(1.5)); await refreshLatest() }
             }
             .onChange(of: lastId) { if Whatsup.shared.chat?.target == friend { Whatsup.shared.chat?.privateLast = lastId } }
             .onReceive(NotificationCenter.default.publisher(for: .y99Seen)) { note in
