@@ -107,6 +107,8 @@ struct ConnectionBadge: View {
         Image(systemName: c.status == .offline ? "network.slash" : "network")
             .foregroundStyle(c.status == .offline ? .red : c.status == .slow ? .yellow : .green)
             .contentTransition(.symbolEffect(.replace))
+            .symbolEffect(.bounce, value: c.status)   // "look here": the status just changed
+            .symbolEffect(.breathe, isActive: c.status == .offline)   // ongoing condition, gently
             .accessibilityLabel(c.status == .offline ? "Offline" : c.status == .slow ? "Slow connection" : "Online")
     }
 }
