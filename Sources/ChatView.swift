@@ -135,6 +135,7 @@ struct ChatView: View {
             }
             #endif
             if !seed.isEmpty {
+                guard messages.isEmpty else { return }   // .task runs again when the chat reappears
                 messages = seed
                 #if DEBUG
                 loadRawSeed()
@@ -547,11 +548,23 @@ struct ChatView: View {
 
     #if DEBUG
     /// Scripted input for simulator checks: -fakeDictation, -fakeTyping.
+    private static var debugScriptsRan = false
     func debugScripts() {
+        guard !Self.debugScriptsRan else { return }   // .task runs again when the chat reappears
+        Self.debugScriptsRan = true
             if ProcessInfo.processInfo.arguments.contains("-fakeDictation") {
                 // Text arriving like dictation: whole words at a time, the in-progress tail rewritten.
                 Task {
                     try? await Task.sleep(for: .seconds(2))
+                    // -videoFirst <file>: play a video full screen and close it before dictating.
+                    let args = ProcessInfo.processInfo.arguments
+                    if let i = args.firstIndex(of: "-videoFirst") {
+                        VideoPlayback.present(URL(fileURLWithPath: args[i + 1]))
+                        try? await Task.sleep(for: .seconds(3))
+                        let root = UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }.first?.rootViewController
+                        root?.dismiss(animated: true)
+                        try? await Task.sleep(for: .seconds(1.5))
+                    }
                     let words = "so I was thinking that we could maybe go out to get some food later tonight if you are not too tired from work and then we can watch a movie or something and honestly I would really love that because it has been such a long week and I miss you a lot so please let me know what you think about all of this okay".split(separator: " ")
                     var done = ""
                     for w in words {
