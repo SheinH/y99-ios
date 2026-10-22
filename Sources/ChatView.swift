@@ -264,7 +264,7 @@ struct ChatView: View {
                         .font(.system(size: 15, weight: .bold))
                         .foregroundStyle(.white)
                         .frame(width: 30, height: 30)
-                        .background(Circle().fill(.blue))
+                        .background(Circle().fill(Color.accentColor))
                 }
                 .padding(4)
             }
@@ -287,7 +287,7 @@ struct ChatView: View {
                     MessageText(text: m.text)
                         .padding(.horizontal, 14).padding(.vertical, 8)
                         .foregroundStyle(m.mine ? .white : .primary)
-                        .background(BubbleShape(mine: m.mine, tail: tail).fill(m.mine ? Color.blue : Color(.systemGray5)))
+                        .background(BubbleShape(mine: m.mine, tail: tail).fill(m.mine ? Color.accentColor : Color(.systemGray5)))
                 }
                 if !m.mine { Spacer(minLength: 60) }
             }

@@ -26,18 +26,20 @@ struct FriendsView: View {
     @EnvironmentObject var session: Session
     @State private var friends: [Friend] = []
     @State private var path: [String] = []
+    @State private var favorites: Set<String> = []
     @ObservedObject private var notifier = Notifier.shared
 
     var body: some View {
         NavigationStack(path: $path) {
-            List(friends) { friend in
-                NavigationLink(value: friend.username) {
-                    HStack(spacing: 12) {
-                        Circle().fill(friend.statusColor).frame(width: 10, height: 10)
-                        Text(friend.username)
-                    }
-                    .accessibilityElement(children: .combine)
-                    .accessibilityValue(friend.statusText)
+            // Favorites (kept on this phone, per account) on top whatever their status, everyone else below.
+            List {
+                let favs = friends.filter { favorites.contains($0.username) }
+                let others = friends.filter { !favorites.contains($0.username) }
+                if !favs.isEmpty {
+                    Section("Favorites") { ForEach(favs) { row($0) } }
+                    Section("Friends") { ForEach(others) { row($0) } }
+                } else {
+                    ForEach(others) { row($0) }
                 }
             }
             .navigationTitle("Friends")
@@ -59,6 +61,7 @@ struct FriendsView: View {
                     Button("Log out") { Task { await session.signOut() } }
                 }
             }
+            .onAppear { favorites = Store.current?.favorites() ?? [] }
             .refreshable { await load() }
             .task { await load() }
             .onReceive(NotificationCenter.default.publisher(for: .y99CaptchaDone)) { _ in
@@ -68,6 +71,26 @@ struct FriendsView: View {
     }
 
     // user/friends -> {friends: [{username, status, ...}]} or {friends: 203} when empty (deob/modules/bKls.js setUserData)
+    func row(_ friend: Friend) -> some View {
+        NavigationLink(value: friend.username) {
+            HStack(spacing: 12) {
+                Circle().fill(friend.statusColor).frame(width: 10, height: 10)
+                Text(friend.username)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityValue(friend.statusText)
+        }
+        .contextMenu {
+            let fav = favorites.contains(friend.username)
+            Button {
+                Store.current?.setFavorite(friend.username, !fav)
+                favorites = Store.current?.favorites() ?? []
+            } label: {
+                Label(fav ? "Remove from Favorites" : "Add to Favorites", systemImage: fav ? "star.slash" : "star")
+            }
+        }
+    }
+
     // Shows the stored list right away (works offline), then refreshes from the server.
     func load() async {
         if friends.isEmpty, let stored = Store.current?.friends(), !stored.isEmpty {

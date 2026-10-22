@@ -34,6 +34,7 @@ import SQLite3
             CREATE TABLE IF NOT EXISTS outbox(seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE NOT NULL,
                 json TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS confirmed(msg_id INTEGER PRIMARY KEY);
+            CREATE TABLE IF NOT EXISTS favorites(username TEXT PRIMARY KEY);
             """)
     }
 
@@ -98,6 +99,14 @@ import SQLite3
             run("INSERT INTO friends(username, status, position) VALUES(?, ?, ?)", f.username, f.status, i)
         }
         exec("COMMIT")
+    }
+
+    // MARK: Favorites (client-side only)
+
+    func favorites() -> Set<String> { Set(query("SELECT username FROM favorites").compactMap { $0[0] as? String }) }
+    func setFavorite(_ username: String, _ on: Bool) {
+        if on { run("INSERT OR IGNORE INTO favorites(username) VALUES(?)", username) }
+        else { run("DELETE FROM favorites WHERE username = ?", username) }
     }
 
     // MARK: Outbox (Outbox.swift); entries kept in insertion order

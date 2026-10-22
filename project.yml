@@ -40,5 +40,8 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: Y99
         INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        # Logo purple at iOS blue's perceived lightness (OKLCH L, C kept; hue from the logo #BC489B):
+        # light #CF38A8 (for #007AFF), dark #D347AD (for #0A84FF).
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         INFOPLIST_KEY_NSCameraUsageDescription: Take a photo to send in a chat.
         INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription: Save photos you take to your library.
