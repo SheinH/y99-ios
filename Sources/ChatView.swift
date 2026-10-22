@@ -37,11 +37,7 @@ struct ChatView: View {
     @State private var keyboardHeight: CGFloat = 336  // last seen keyboard height (incl. home-indicator area)
     @State private var loadingOlder = false
     @State private var reachedStart = false
-    @State private var userScrolling = false
-    // Tracks the message at the bottom edge; SwiftUI keeps that message in place when rows are
-    // inserted above it or change height (older pages, images finishing loading).
     @State private var position = ScrollPosition(idType: String.self)
-    @State private var pinnedToBottom = true   // only the user's own scrolling changes this
     @State private var friendThumb: String?      // their avatar, from their newest message
     @State private var friendThumbId = 0
     @State private var avatarImage: UIImage?     // full size, once fetched
@@ -57,78 +53,53 @@ struct ChatView: View {
             }
     }
 
+    // The thread is drawn upside down (and each row flipped back), like most chat apps: its start is the
+    // newest message at the bottom, so it opens there, new messages appear without scrolling, history pages
+    // in at the far end, and the keyboard or emoji panel shrinking the view leaves the newest in place.
     var chat: some View {
-        ScrollView {
+        VStack(spacing: 0) {
+            ScrollView {
                 LazyVStack(spacing: 0) {
-                    if loadingOlder {
-                        ProgressView().frame(maxWidth: .infinity).padding(.vertical, 8)
-                    }
+                    if partnerTyping { TypingBubble().padding(.top, 10).flipped() }
                     let lastMine = messages.lastIndex(where: \.mine)
                     // Identify rows by message id, not position: history inserts shift positions, which
                     // would hand a row (and its in-flight image load) to a different message.
-                    ForEach(Array(messages.enumerated()), id: \.element.id) { i, m in
+                    ForEach(Array(messages.enumerated()).reversed(), id: \.element.id) { i, m in
                         // Group runs from the same sender: tight spacing inside a run, tail on its last bubble.
                         let startsRun = i == 0 || messages[i - 1].mine != m.mine
                         let endsRun = i == messages.count - 1 || messages[i + 1].mine != m.mine
                         bubble(m, tail: endsRun, showStatus: i == lastMine)
                             .padding(.top, startsRun ? 10 : 2)
+                            .flipped()
                     }
-                    if partnerTyping { TypingBubble().padding(.top, 10) }
+                    // Reaching the far end (oldest loaded) pages in older history.
+                    Group {
+                        if loadingOlder { ProgressView().padding(.vertical, 8) } else { Color.clear.frame(height: 1) }
+                    }
+                    .frame(maxWidth: .infinity)
+                    .onAppear { Task { await loadOlder() } }
                 }
                 .scrollTargetLayout()
                 .padding(.horizontal, 16)
                 .padding(.vertical, 8)
-                // Content is exactly the screen's width: a row that's briefly too wide (a placeholder,
-                // a long unbroken string) can't widen it and make the bottom anchor re-centre the chat sideways.
-                .containerRelativeFrame(.horizontal)
             }
-            .scrollPosition($position, anchor: .bottom)
-            // Bottom-anchored so the thread rides up with the keyboard and opens at the newest message.
-            .defaultScrollAnchor(.bottom)
+            .scrollPosition($position)
+            .noScrollEdgeEffect()
+            .flipped()
+            .clipped()   // without the edge blur, rows would show through the bar
             .scrollDismissesKeyboard(.interactively)
-            // Page in older history when *the user* drags near the top. (A sentinel row's onAppear fires
-            // on open because the lazy stack builds the top row before anchoring to the bottom.)
-            .onScrollPhaseChange { _, phase in
-                userScrolling = [.tracking, .interacting, .decelerating].contains(phase)
-            }
-            .onScrollGeometryChange(for: Bool.self) { g in
-                g.contentOffset.y + g.contentInsets.top < 300
-            } action: { _, nearTop in
-                if nearTop && userScrolling { Task { await loadOlder() } }
-            }
-            // Stick to the bottom like a chat app: while the user is at the end, content growing there
-            // (an image swapping its 200x150 placeholder for the real size) keeps the end in view.
-            .onScrollGeometryChange(for: Bool.self) { g in
-                g.visibleRect.maxY >= g.contentSize.height - 60
-            } action: { _, atBottom in
-                if userScrolling { pinnedToBottom = atBottom }
-            }
-            // Also when the viewport changes (keyboard/emoji panel): the custom input view shrinks the
-            // container and grows the bottom inset at once, overshooting ~270pt past the end, and unlike
-            // the system keyboard nothing corrects it afterwards.
-            .onScrollGeometryChange(for: [CGFloat].self) { g in
-                [g.contentSize.height, g.containerSize.height, g.contentInsets.bottom]
-            } action: { _, _ in
-                if pinnedToBottom && !userScrolling { position.scrollTo(edge: .bottom) }
-            }
-            // Follow new messages at the bottom; older pages inserted at the top don't move the view.
-            // No animation: an animated scroll racing the size-change re-pin below can blank lazy rows.
+            // My own new message brings the thread back to the newest, even when scrolled up.
             .onChange(of: messages.last?.id) {
-                if pinnedToBottom || messages.last?.mine == true {
-                    pinnedToBottom = true
-                    position.scrollTo(edge: .bottom)
-                }
+                if messages.last?.mine == true { withAnimation { position.scrollTo(edge: .top) } }
             }
-            // A safe-area inset (not a VStack sibling) is what keeps the bar above the keyboard.
-            .safeAreaInset(edge: .bottom) {
-                composer
-                    // Remember the real keyboard's height so the emoji panel matches it.
-                    .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { note in
-                        if !showingEmoji, let f = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect, f.height > 100 {
-                            keyboardHeight = f.height
-                        }
+            composer
+                // Remember the real keyboard's height so the emoji panel matches it.
+                .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { note in
+                    if !showingEmoji, let f = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect, f.height > 100 {
+                        keyboardHeight = f.height
                     }
-            }
+                }
+        }
         .navigationTitle(friend)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -443,7 +414,7 @@ struct ChatView: View {
     // older than private_last, newest-first; empty (or 203) at the start of the thread. The server pages
     // by private_last alone (pageUp is ignored), so pass the oldest id held. Checked against live threads.
     func loadOlder() async {
-        guard !loadingOlder, !reachedStart,
+        guard seed.isEmpty, !loadingOlder, !reachedStart,
               let oldest = messages.compactMap(\.serverId).min() else { return }
         loadingOlder = true
         defer { loadingOlder = false }
@@ -630,6 +601,16 @@ extension ChatView {
             return
         }
         messages.append(Msg(id: e.id, text: "", mine: true, image: .local(img.data), pending: e.state))
+    }
+}
+
+extension View {
+    /// Upside down; the thread and each of its rows get this, so rows read normally (see ChatView.chat).
+    func flipped() -> some View { scaleEffect(x: 1, y: -1) }
+
+    /// iOS 26 blurs scroll content at the bars; on the flipped thread that lands on the wrong edges.
+    @ViewBuilder func noScrollEdgeEffect() -> some View {
+        if #available(iOS 26, *) { scrollEdgeEffectHidden() } else { self }
     }
 }
 
