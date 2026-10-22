@@ -68,7 +68,11 @@ struct FriendsView: View {
     }
 
     // user/friends -> {friends: [{username, status, ...}]} or {friends: 203} when empty (deob/modules/bKls.js setUserData)
+    // Shows the stored list right away (works offline), then refreshes from the server.
     func load() async {
+        if friends.isEmpty, let stored = Store.current?.friends(), !stored.isEmpty {
+            friends = stored.map { Friend(username: $0.username, status: $0.status) }
+        }
         let r = await API.post("user/friends", [:], auth: session.auth, username: session.username)
         // Anything without a `friends` key (e.g. a captcha challenge) leaves the current list alone.
         guard let value = (r as? [String: Any])?["friends"] else { return }
@@ -81,5 +85,6 @@ struct FriendsView: View {
         } else {
             friends = []
         }
+        Store.current?.saveFriends(friends.map { ($0.username, $0.status) })
     }
 }

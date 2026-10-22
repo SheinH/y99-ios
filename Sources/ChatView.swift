@@ -151,6 +151,14 @@ struct ChatView: View {
                 }
             }
             #endif
+            // Stored history first (instant, works offline); polling then asks only for newer messages.
+            if let store = Store.current {
+                let st = store.state(chat: friend)
+                readId = max(readId, st.readId); deliveredId = max(deliveredId, st.deliveredId)
+                markedSeen = max(markedSeen, st.markedSeen)
+                if draft.isEmpty { draft = st.draft }
+                append(store.messages(chat: friend, limit: 100), persist: false)
+            }
             Whatsup.shared.chat = .init(target: friend, privateLast: lastId) { dict in handle(dict) }
             Whatsup.shared.pollNow()
             await watchReadReceipts()
@@ -165,6 +173,8 @@ struct ChatView: View {
             if let lastEdit, now.timeIntervalSince(lastEdit) < 5 { typingMs += now.timeIntervalSince(lastEdit) * 1000 }
             lastEdit = draft.isEmpty ? nil : now
         }
+        .onChange(of: [readId, deliveredId, markedSeen]) { saveState() }
+        .onChange(of: draft) { saveState() }
         .onChange(of: lastId) { if Whatsup.shared.chat?.target == friend { Whatsup.shared.chat?.privateLast = lastId } }
         .onReceive(NotificationCenter.default.publisher(for: .y99Seen)) { note in
             guard let info = note.userInfo, info["target"] as? String == friend else { return }
@@ -289,7 +299,16 @@ struct ChatView: View {
 
     // The shared whatsup loop (Whatsup.swift) returns this thread's new messages in `private`.
     func handle(_ dict: [String: Any]) {
-        if let arr = dict["private"] as? [[String: Any]] { append(arr) }
+        if let arr = dict["private"] as? [[String: Any]] {
+            let stored = Store.current?.newestId(chat: friend)
+            append(arr)
+            // A big batch after time offline may skip messages between it and the stored history:
+            // page backwards until the two meet.
+            let ids = arr.compactMap { Int("\($0["id"] ?? "")") }
+            if let stored, ids.count >= 10, let oldest = ids.min(), oldest > stored {
+                Task { await fillGap(below: oldest, down: stored) }
+            }
+        }
         if let ls = dict["last_seen"] as? [Any], ls.count == 2 {
             deliveredId = max(deliveredId, Int("\(ls[0])") ?? 0)
             readId = max(readId, Int("\(ls[1])") ?? 0)
@@ -330,6 +349,11 @@ struct ChatView: View {
               let oldest = messages.compactMap(\.serverId).min() else { return }
         loadingOlder = true
         defer { loadingOlder = false }
+        // Older history from the database first; the server only past what's stored.
+        if let stored = Store.current?.messages(chat: friend, before: oldest, limit: 50), !stored.isEmpty {
+            append(stored, persist: false)
+            return
+        }
         let r = await API.post("private/fetch", [
             "target": friend, "private_last": String(oldest), "pageUp": "1", "mode": "private",
         ], auth: session.auth, username: session.username)
@@ -338,7 +362,29 @@ struct ChatView: View {
         append(arr)
     }
 
-    func append(_ arr: [[String: Any]]) {
+    /// Pages `private/fetch` backwards from `below` until reaching ids at or under `down` (max 10 pages).
+    func fillGap(below: Int, down: Int) async {
+        var cursor = below
+        for _ in 0..<10 {
+            let r = await API.post("private/fetch", [
+                "target": friend, "private_last": String(cursor), "pageUp": "1", "mode": "private",
+            ], auth: session.auth, username: session.username)
+            guard let arr = (r as? [String: Any])?["private"] as? [[String: Any]], !arr.isEmpty else { return }
+            append(arr)
+            guard let oldest = arr.compactMap({ Int("\($0["id"] ?? "")") }).min(), oldest > down else { return }
+            cursor = oldest
+        }
+    }
+
+    func saveState() {
+        guard seed.isEmpty else { return }
+        Store.current?.save(chat: friend, state: .init(readId: readId, deliveredId: deliveredId,
+                                                      markedSeen: markedSeen, draft: draft))
+    }
+
+    /// Adds server messages to the thread; `persist` also stores them (off when they came from the store).
+    func append(_ arr: [[String: Any]], persist: Bool = true) {
+        if persist && seed.isEmpty { Store.current?.save(chat: friend, arr) }
         for o in arr {
             let id = String(describing: o["id"] ?? UUID().uuidString)
             guard !seen.contains(id) else { continue }

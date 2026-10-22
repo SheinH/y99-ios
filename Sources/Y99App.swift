@@ -12,6 +12,7 @@ struct Y99App: App {
     init() {
         // Animated WebP (the baked blobs) through ImageIO; GIF/APNG coders are registered by default.
         SDImageCodersManager.shared.addCoder(SDImageAWebPCoder.shared)
+        Task.detached(priority: .background) { DiskCache.trim() }   // keep media under 500 MB
         // Must be registered before launch finishes.
         BGTaskScheduler.shared.register(forTaskWithIdentifier: Notifier.refreshTask, using: nil) { task in
             Notifier.scheduleRefresh()

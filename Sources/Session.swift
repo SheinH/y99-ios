@@ -12,6 +12,7 @@ import WebKit
     private func apply(_ d: [String: Any]) {
         auth = d["auth"] as? String
         username = (d["username"] as? String) ?? ""
+        Store.open(username: username)   // this account's cache (kept across sign-outs)
     }
 
     func load() {
@@ -36,6 +37,7 @@ import WebKit
         Whatsup.shared.reset()
         if let auth { _ = await API.post("auth/logout", [:], auth: auth, username: username) }
         UserDefaults.standard.removeObject(forKey: "self")
+        Store.close()   // the database stays on disk for the next time this account signs in
         let store = WKWebsiteDataStore.default()
         await store.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast)
         HTTPCookieStorage.shared.removeCookies(since: .distantPast)

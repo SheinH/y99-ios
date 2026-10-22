@@ -190,13 +190,20 @@ struct ChatImage: View {
         failed = image == nil
     }
 
+    // Disk first (DiskCache, shared and size-capped), then the network; downloads are saved to disk.
     private static func fetch(_ path: String) async -> UIImage? {
         guard let url = ImageSource.url(for: path) else { return nil }
+        let file = DiskCache.imageFile(for: url)
+        if let data = await Task.detached(operation: { DiskCache.read(file) }).value, let img = await decode(data) {
+            return img
+        }
         var req = URLRequest(url: url)
         req.setValue("https://meetyou.me/", forHTTPHeaderField: "Referer") // 403 without it
         guard let (data, resp) = try? await URLSession.shared.data(for: req),
               (resp as? HTTPURLResponse)?.statusCode == 200 else { return nil }
-        return await decode(data)
+        let img = await decode(data)
+        if img != nil { Task.detached(priority: .utility) { DiskCache.write(data, to: file) } }
+        return img
     }
 
     private static func decode(_ data: Data) async -> UIImage? {

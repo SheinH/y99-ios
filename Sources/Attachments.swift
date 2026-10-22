@@ -97,10 +97,10 @@ enum Attachments {
     @MainActor private static var inFlight: [String: Task<URL?, Never>] = [:]
 
     @MainActor static func download(_ id: String) async -> URL? {
-        let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("attachments")
+        let dir = DiskCache.attachments   // shares the 500 MB limit with images
         let safe = id.replacingOccurrences(of: "/", with: "_")
         let dest = dir.appendingPathComponent(safe)
-        if FileManager.default.fileExists(atPath: dest.path) { return dest }
+        if FileManager.default.fileExists(atPath: dest.path) { DiskCache.touch(dest); return dest }
         if let t = inFlight[id] { return await t.value }
         let t = Task<URL?, Never> {
             guard let url = url(for: id) else { return nil }
@@ -111,6 +111,7 @@ enum Attachments {
             try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             try? FileManager.default.removeItem(at: dest)
             guard (try? FileManager.default.moveItem(at: tmp, to: dest)) != nil else { return nil }
+            DiskCache.didWrite()
             return dest
         }
         inFlight[id] = t
