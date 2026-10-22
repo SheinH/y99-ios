@@ -43,7 +43,9 @@ struct ChatView: View {
     @State private var position = ScrollPosition(idType: String.self)
     @State private var pinnedToBottom = true   // only the user's own scrolling changes this
 
-    var body: some View {
+    var body: some View { observers(chat) }
+
+    var chat: some View {
         ScrollView {
                 LazyVStack(spacing: 0) {
                     if loadingOlder {
@@ -176,27 +178,32 @@ struct ChatView: View {
             if Notifier.shared.activeChat == friend { Notifier.shared.activeChat = nil }
             if Whatsup.shared.chat?.target == friend { Whatsup.shared.chat = nil }
         }
-        .onChange(of: draft) {
-            let now = Date()
-            if let lastEdit, now.timeIntervalSince(lastEdit) < 5 { typingMs += now.timeIntervalSince(lastEdit) * 1000 }
-            lastEdit = draft.isEmpty ? nil : now
-        }
-        .onChange(of: [readId, deliveredId, markedSeen]) { saveState() }
-        .onReceive(NotificationCenter.default.publisher(for: .y99SocketReady)) { _ in markSeenIfVisible() }
-        .onReceive(NotificationCenter.default.publisher(for: .y99Outbox)) { note in
-            if let info = note.userInfo { outboxChanged(info) }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
-            guard seed.isEmpty else { return }
-            Task { await refreshLatest() }
-        }
-        .onChange(of: draft) { saveState() }
-        .onChange(of: lastId) { if Whatsup.shared.chat?.target == friend { Whatsup.shared.chat?.privateLast = lastId } }
-        .onReceive(NotificationCenter.default.publisher(for: .y99Seen)) { note in
-            guard let info = note.userInfo, info["target"] as? String == friend else { return }
-            if let d = info["delivered"] as? Int { deliveredId = max(deliveredId, d) }
-            if let s = info["seen"] as? Int { readId = max(readId, s) }
-        }
+    }
+
+    /// State saving and app/socket/outbox events (split from `chat` to keep the type checker fast).
+    func observers(_ v: some View) -> some View {
+        v
+            .onChange(of: draft) {
+                let now = Date()
+                if let lastEdit, now.timeIntervalSince(lastEdit) < 5 { typingMs += now.timeIntervalSince(lastEdit) * 1000 }
+                lastEdit = draft.isEmpty ? nil : now
+            }
+            .onChange(of: [readId, deliveredId, markedSeen]) { saveState() }
+            .onReceive(NotificationCenter.default.publisher(for: .y99SocketReady)) { _ in markSeenIfVisible() }
+            .onReceive(NotificationCenter.default.publisher(for: .y99Outbox)) { note in
+                if let info = note.userInfo { outboxChanged(info) }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+                guard seed.isEmpty else { return }
+                Task { await refreshLatest() }
+            }
+            .onChange(of: draft) { saveState() }
+            .onChange(of: lastId) { if Whatsup.shared.chat?.target == friend { Whatsup.shared.chat?.privateLast = lastId } }
+            .onReceive(NotificationCenter.default.publisher(for: .y99Seen)) { note in
+                guard let info = note.userInfo, info["target"] as? String == friend else { return }
+                if let d = info["delivered"] as? Int { deliveredId = max(deliveredId, d) }
+                if let s = info["seen"] as? Int { readId = max(readId, s) }
+            }
     }
 
     var canSend: Bool { !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
