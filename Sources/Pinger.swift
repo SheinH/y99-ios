@@ -5,18 +5,18 @@ import Darwin
 // ICMP sockets (no root, no entitlement; Apple's SimplePing sample does the same). One 8-byte ping a second,
 // alternating Cloudflare and Google so neither one's outage, or a router hijacking 1.1.1.1, looks like ours.
 final class Pinger: @unchecked Sendable {   // all state is touched on `queue` only
-    /// Round-trip time of each reply, delivered on the pinger's queue.
-    var onReply: ((TimeInterval) -> Void)?
-    /// Once a second after each send, on the pinger's queue.
-    var onTick: (() -> Void)?
+    /// Each ping's outcome, on the pinger's queue: its number and round-trip time, or nil when no reply
+    /// came within `timeout` (a reply after that is ignored). Pings go out every second regardless.
+    var onResult: ((_ seq: Int, _ rtt: TimeInterval?) -> Void)?
+    static let timeout: TimeInterval = 1
 
     private static let targets = ["1.1.1.1", "8.8.8.8"]
     private let queue = DispatchQueue(label: "y99.ping")
     private var fd: Int32 = -1
     private var reader: DispatchSourceRead?
     private var timer: DispatchSourceTimer?
-    private var seq: UInt16 = 0
-    private var sentAt: [UInt16: Date] = [:]
+    private var count = 0                       // pings sent since start; the wire carries its low 16 bits
+    private var sentAt: [UInt16: (count: Int, at: Date)] = [:]
     private let ident = UInt16.random(in: 1...UInt16.max)
 
     func start() { queue.async { self.begin() } }
@@ -48,17 +48,21 @@ final class Pinger: @unchecked Sendable {   // all state is touched on `queue` o
         reader?.cancel(); reader = nil   // closes the socket
         fd = -1
         sentAt.removeAll()
+        count = 0
     }
 
     private func tick() {
-        let now = Date()
-        sentAt = sentAt.filter { now.timeIntervalSince($0.value) < 10 }
-        if fd >= 0 {
-            seq &+= 1
-            send(to: Self.targets[Int(seq) % Self.targets.count], seq: seq)
-            sentAt[seq] = now
+        guard fd >= 0 else { return }
+        let n = count
+        count += 1
+        let seq = UInt16(truncatingIfNeeded: n)
+        sentAt[seq] = (n, Date())
+        send(to: Self.targets[n % Self.targets.count], seq: seq)
+        queue.asyncAfter(deadline: .now() + Self.timeout) { [weak self] in
+            guard let self, let sent = self.sentAt[seq], sent.count == n else { return }
+            self.sentAt[seq] = nil
+            self.onResult?(n, nil)
         }
-        onTick?()
     }
 
     // Echo request: type 8, code 0, checksum, identifier, sequence, then 8 bytes of payload.
@@ -90,7 +94,7 @@ final class Pinger: @unchecked Sendable {   // all state is touched on `queue` o
             let start = buf[0] >> 4 == 4 ? Int(buf[0] & 0x0f) * 4 : 0
             guard n >= start + 8, buf[start] == 0 else { continue }   // type 0: echo reply
             let s = UInt16(buf[start + 6]) << 8 | UInt16(buf[start + 7])
-            if let t = sentAt.removeValue(forKey: s) { onReply?(Date().timeIntervalSince(t)) }
+            if let sent = sentAt.removeValue(forKey: s) { onResult?(sent.count, Date().timeIntervalSince(sent.at)) }
         }
     }
 
