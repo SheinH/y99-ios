@@ -427,6 +427,12 @@ struct ChatView: View {
         if persist && seed.isEmpty { Store.current?.save(chat: friend, arr) }
         for o in arr {
             let id = String(describing: o["id"] ?? UUID().uuidString)
+            // Read/delivered flags on my messages count every time they arrive, also for messages
+            // already on screen (a refresh brings updated flags for those).
+            if (o["hunter"] as? String) == session.username, let n = Int(id) {
+                if "\(o["seen"] ?? 0)" == "1" { readId = max(readId, n) }
+                if "\(o["delivered"] ?? 0)" == "1" { deliveredId = max(deliveredId, n) }
+            }
             if seen.contains(id) {
                 // y99's copy of a photo we stored without an address (sent, then offline): fill it in.
                 if (o["type"] as? String) == "image", let path = o["message"] as? String, !path.isEmpty,
@@ -457,9 +463,6 @@ struct ChatView: View {
             messages.insert(Msg(id: id, text: shown, mine: mine, image: image, video: video, serverId: n), at: at)
             if let n {
                 if n > lastId { lastId = n }
-                // The first load has no last_seen, but each of my messages carries its own flags.
-                if mine && "\(o["seen"] ?? 0)" == "1" { readId = max(readId, n) }
-                if mine && "\(o["delivered"] ?? 0)" == "1" { deliveredId = max(deliveredId, n) }
             }
         }
         markSeenIfVisible()
