@@ -523,7 +523,7 @@ struct ChatView: View {
         let seconds = typingMs / 1000
         typingMs = 0; lastEdit = nil
         let e = Outbox.shared.addText(chat: friend, text: text, typingSeconds: seconds)
-        messages.append(Msg(id: e.id, text: text, mine: true, pending: e.state))
+        messages.append(Msg(id: e.id, text: HTMLText.encode(text), mine: true, pending: e.state))
     }
 
     /// Outbox progress for a bubble in this chat; once sent it becomes a normal message with its server id.
@@ -545,7 +545,7 @@ struct ChatView: View {
     /// Unsent messages for this chat (also after a relaunch), shown after the history.
     func showOutbox() {
         for e in Outbox.shared.entries(chat: friend) where !messages.contains(where: { $0.id == e.id }) {
-            var m = Msg(id: e.id, text: e.text ?? "", mine: true, pending: e.state)
+            var m = Msg(id: e.id, text: HTMLText.encode(e.text ?? ""), mine: true, pending: e.state)
             if e.kind == .photo, let url = e.fileURL, let data = try? Data(contentsOf: url) { m.image = .local(data) }
             if e.kind == .video, let url = e.fileURL { m.video = .local(url) }
             messages.append(m)

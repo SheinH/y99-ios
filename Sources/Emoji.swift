@@ -206,13 +206,11 @@ struct EmojiPlayer: UIViewRepresentable {
     }
 }
 
-// Message text with inline emoji. Plain messages stay a single Text (normal wrapping/selection);
-// messages with image emoji are laid out word by word so the images flow inside the line.
-struct MessageText: View {
-    let text: String
-
-    // y99 stores messages HTML-escaped; the web undoes exactly these, in this order (deob/app.deob.js ~51572).
-    static func unescape(_ s: String) -> String {
+// y99's message text is HTML-escaped by the server (the web sends it raw, just trimmed: deob/modules/CMHb.js).
+// Messages here are kept in that escaped form, including our own copies, and decoded only for display.
+enum HTMLText {
+    /// What the web undoes before showing a message, in this order (deob/app.deob.js ~51572).
+    static func decode(_ s: String) -> String {
         s.replacingOccurrences(of: "&amp;", with: "&")
             .replacingOccurrences(of: "&lt;", with: "<")
             .replacingOccurrences(of: "&gt;", with: ">")
@@ -220,8 +218,23 @@ struct MessageText: View {
             .replacingOccurrences(of: "&#039;", with: "'")
     }
 
+    /// The server's escaping, for our own copy of a message we sent (`&` first so nothing is escaped twice).
+    static func encode(_ s: String) -> String {
+        s.replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+            .replacingOccurrences(of: "'", with: "&#039;")
+    }
+}
+
+// Message text with inline emoji. Plain messages stay a single Text (normal wrapping/selection);
+// messages with image emoji are laid out word by word so the images flow inside the line.
+struct MessageText: View {
+    let text: String
+
     var body: some View {
-        let pieces = Emoji.pieces(Self.unescape(text))
+        let pieces = Emoji.pieces(HTMLText.decode(text))
         if pieces.allSatisfy({ if case .text = $0 { true } else { false } }) {
             Text(pieces.map { if case .text(let s) = $0 { s } else { "" } }.joined())
         } else {

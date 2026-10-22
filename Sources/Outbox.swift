@@ -260,7 +260,7 @@ struct OutboxEntry: Codable, Identifiable {
             guard (o["hunter"] as? String) == me, let id = Int("\(o["id"] ?? "")"), !store.isConfirmed(id),
                   Double("\(o["date"] ?? "")").map({ $0 >= since }) ?? false else { return nil }
             switch e.kind {
-            case .text: return (o["message"] as? String).map(norm) == norm(e.text ?? "") ? id : nil
+            case .text: return (o["message"] as? String).map { norm(HTMLText.decode($0)) } == norm(e.text ?? "") ? id : nil
             case .photo: return (o["type"] as? String) == "image" ? id : nil
             case .video: return (o["attachmentId"] as? String) == e.attachmentId && e.attachmentId != nil ? id : nil
             }
@@ -277,7 +277,7 @@ struct OutboxEntry: Codable, Identifiable {
         var obj: [String: Any] = ["id": msgId, "hunter": store.username, "target": e.chat,
                                   "date": Int(Date().timeIntervalSince1970), "delivered": 0, "seen": 0]
         switch e.kind {
-        case .text: obj["message"] = e.text ?? ""
+        case .text: obj["message"] = HTMLText.encode(e.text ?? "")   // as y99 stores it
         case .photo:
             obj["type"] = "image"; obj["message"] = ""   // the photo shows from the cache by message id
             if let url = e.fileURL, let data = try? Data(contentsOf: url) { ImageSource.cacheSent(data, messageId: msgId) }
