@@ -156,6 +156,7 @@ struct ChatImage: View {
     private struct Viewed: Identifiable { let id = UUID(); let image: UIImage }
     @Environment(\.displayScale) private var scale
     @Namespace private var zoom
+    @State private var onScreen = SourceFrame()
 
     private static let cache = NSCache<NSString, UIImage>()
     // photo.slash is newer than iOS 18; older systems get the closest older symbol.
@@ -192,8 +193,9 @@ struct ChatImage: View {
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { onScreen.rect = $0 }
         .zoomSource(id, zoom)
-        .fullScreenCover(item: $viewer) { ImageViewer(image: $0.image).zoomTransition(id, zoom) }
+        .fullScreenCover(item: $viewer) { ImageViewer(image: $0.image, source: onScreen).zoomTransition(id, zoom) }
         .task(id: "\(id)|\(source.key)|\(attempt)") {   // also reloads when the address arrives
             await load()
             guard !settled, attempt < Self.retryDelays.count else { return }
@@ -283,8 +285,11 @@ struct ChatImage: View {
 // (or flick) to close. The system's own drag-to-close is turned off because it dragged the buttons too.
 struct ImageViewer: View {
     let image: UIImage
+    /// The thumbnail it opened from: a drag-close lands the picture there itself (see ZoomView.land).
+    var source: SourceFrame? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var chromeHidden = false
+    @State private var landing = false             // shrinking into the thumbnail; the backdrop fades out
     @State private var dragProgress: CGFloat = 0   // 0 at rest, 1 at the close distance
     @State private var saved: Bool?                 // briefly shows how Save went
 
@@ -298,9 +303,20 @@ struct ImageViewer: View {
                           if (p > 0) != (dragProgress > 0) { withAnimation(.easeInOut(duration: 0.15)) { dragProgress = p } }
                           else { dragProgress = p }
                       },
-                      onClose: { dismiss() })
+                      target: { source?.rect },
+                      onLanding: { withAnimation(.easeOut(duration: 0.3)) { landing = true } },
+                      onClose: { landed in
+                          // Landed on the thumbnail already: the system's zoom back would start over from
+                          // full screen (the picture popped back up, then shrank again), so skip it.
+                          if landed {
+                              var t = Transaction(); t.disablesAnimations = true
+                              withTransaction(t) { dismiss() }
+                          } else {
+                              dismiss()
+                          }
+                      })
             .ignoresSafeArea()
-            .background(Color.black.opacity(1 - 0.85 * Double(dragProgress)).ignoresSafeArea())
+            .background(Color.black.opacity(landing ? 0 : 1 - 0.85 * Double(dragProgress)).ignoresSafeArea())
             // Plain buttons over the picture that fade, not a navigation bar that slides away:
             // close top right, save and share bottom right.
             .overlay(alignment: .topTrailing) {
@@ -365,7 +381,9 @@ struct ZoomableImage: UIViewRepresentable {
     let image: UIImage
     var onTap: () -> Void = {}
     var onDrag: (CGFloat) -> Void = { _ in }
-    var onClose: () -> Void = {}
+    var target: () -> CGRect? = { nil }
+    var onLanding: () -> Void = {}
+    var onClose: (_ landed: Bool) -> Void = { _ in }
 
     func makeUIView(context: Context) -> Holder {
         let h = Holder()
@@ -377,6 +395,7 @@ struct ZoomableImage: UIViewRepresentable {
         let v = h.zoom
         v.imageView.image = image
         v.onTap = onTap; v.onDrag = onDrag; v.onClose = onClose
+        v.target = target; v.onLanding = onLanding
     }
 
     // The close drag moves the whole zoom view, so it lives in a plain holder that SwiftUI sizes.
@@ -397,8 +416,11 @@ struct ZoomableImage: UIViewRepresentable {
         let imageView = UIImageView()
         var onTap: () -> Void = {}
         var onDrag: (CGFloat) -> Void = { _ in }
-        var onClose: () -> Void = {}
+        var target: () -> CGRect? = { nil }   // the thumbnail, in window coordinates
+        var onLanding: () -> Void = {}
+        var onClose: (_ landed: Bool) -> Void = { _ in }
         private let closeDistance: CGFloat = 140
+        private var landing = false
         private lazy var pan = UIPanGestureRecognizer(target: self, action: #selector(dragged(_:)))
 
         override init(frame: CGRect) {
@@ -424,7 +446,7 @@ struct ZoomableImage: UIViewRepresentable {
                     UIView.animate(withDuration: 0.3) { self?.transform = CGAffineTransform(translationX: 40, y: 260).scaledBy(x: 0.85, y: 0.85) }
                     self?.onDrag(1)
                     try? await Task.sleep(for: .seconds(0.8))
-                    self?.onClose()
+                    self?.release(close: true)
                 }
             }
             #endif
@@ -433,7 +455,7 @@ struct ZoomableImage: UIViewRepresentable {
 
         override func layoutSubviews() {
             super.layoutSubviews()
-            if zoomScale == 1 { imageView.frame = bounds; contentSize = bounds.size }
+            if zoomScale == 1, !landing { imageView.frame = bounds; contentSize = bounds.size }
         }
 
         func viewForZooming(in scrollView: UIScrollView) -> UIView? { imageView }
@@ -455,16 +477,48 @@ struct ZoomableImage: UIViewRepresentable {
                 transform = CGAffineTransform(translationX: t.x, y: t.y).scaledBy(x: shrink, y: shrink)
                 onDrag(min(max(t.y, 0) / closeDistance, 1))
             case .ended, .cancelled:
-                if g.state == .ended, t.y > closeDistance || g.velocity(in: superview).y > 900 {
-                    onClose()
-                } else {
-                    UIView.animate(withDuration: 0.35, delay: 0, usingSpringWithDamping: 0.8, initialSpringVelocity: 0) {
-                        self.transform = .identity
-                    }
-                    onDrag(0)
-                }
+                release(close: g.state == .ended && (t.y > closeDistance || g.velocity(in: superview).y > 900))
             default: break
             }
+        }
+
+        private func release(close: Bool) {
+            if close {
+                land()
+            } else {
+                UIView.animate(withDuration: 0.35, delay: 0, usingSpringWithDamping: 0.8, initialSpringVelocity: 0) {
+                    self.transform = .identity
+                }
+                onDrag(0)
+            }
+        }
+
+        /// From wherever the drag left it, the picture shrinks onto the thumbnail (same aspect ratio, so it
+        /// fits exactly) and rounds its corners like it; then the viewer closes without an animation of its own.
+        private func land() {
+            guard let sup = superview, let size = imageView.image?.size, size.width > 0, size.height > 0,
+                  let r = target(), r.width > 1, r.height > 1 else { onClose(false); return }
+            let dest = sup.convert(r, from: nil)
+            // Off screen (scrolled away meanwhile): the system's own zoom back is the better choice.
+            guard dest.intersects(sup.bounds) else { onClose(false); return }
+            // Where the picture sits in this view, untransformed (aspect fit).
+            let k = min(bounds.width / size.width, bounds.height / size.height)
+            let fit = CGRect(x: bounds.midX - size.width * k / 2, y: bounds.midY - size.height * k / 2,
+                             width: size.width * k, height: size.height * k)
+            let s = dest.width / fit.width
+            // The transform works around this view's center: scale first, then move.
+            let tx = dest.midX - center.x - s * (fit.midX - bounds.midX)
+            let ty = dest.midY - center.y - s * (fit.midY - bounds.midY)
+            landing = true
+            isUserInteractionEnabled = false
+            imageView.frame = fit
+            imageView.clipsToBounds = true
+            imageView.layer.cornerCurve = .continuous
+            onLanding()
+            UIView.animate(withDuration: 0.32, delay: 0, usingSpringWithDamping: 1, initialSpringVelocity: 0) {
+                self.transform = CGAffineTransform(translationX: tx, y: ty).scaledBy(x: s, y: s)
+                self.imageView.layer.cornerRadius = 18 / s
+            } completion: { _ in self.onClose(true) }
         }
 
         @objc private func toggleZoom(_ g: UITapGestureRecognizer) {
@@ -475,6 +529,9 @@ struct ZoomableImage: UIViewRepresentable {
         }
     }
 }
+
+/// Where a thumbnail is on screen, kept current while its viewer is open.
+final class SourceFrame { var rect: CGRect = .zero }
 
 extension View {
     // The Photos-style zoom from thumbnail to viewer needs iOS 18; earlier versions get the plain cover.
