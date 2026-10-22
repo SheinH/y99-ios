@@ -145,6 +145,11 @@ struct ChatImage: View {
     @State private var image: UIImage?
     @State private var failed = false
     @State private var expired = false   // y99 deleted it and there's no copy here
+    // Done trying: the full size is showing, or y99 says it's gone. Otherwise (a blip, a dropped
+    // connection, only the thumb arrived) it tries again: on a timer, when back online, or on tap.
+    @State private var settled = false
+    @State private var attempt = 0
+    private static let retryDelays: [Double] = [2, 5, 15, 30]
     @State private var viewing = false
     @Namespace private var zoom
 
@@ -170,6 +175,7 @@ struct ChatImage: View {
             } else {
                 Color(.systemGray5)
                     .frame(width: 200, height: 150)
+                    .onTapGesture { if failed { attempt += 1 } }
                     .overlay {
                         if failed {
                             Image(systemName: "photo.badge.exclamationmark").font(.title2).foregroundStyle(.secondary)
@@ -184,7 +190,13 @@ struct ChatImage: View {
         .fullScreenCover(isPresented: $viewing) {
             if let image { ImageViewer(image: image).zoomTransition(id, zoom) }
         }
-        .task(id: "\(id)|\(source.key)") { await load() }   // reload when the address arrives
+        .task(id: "\(id)|\(source.key)|\(attempt)") {   // also reloads when the address arrives
+            await load()
+            guard !settled, attempt < Self.retryDelays.count else { return }
+            try? await Task.sleep(for: .seconds(Self.retryDelays[attempt]))
+            if !Task.isCancelled { attempt += 1 }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .y99Online)) { _ in if !settled { attempt += 1 } }
     }
 
     private func fitted(_ s: CGSize) -> CGSize {
@@ -194,11 +206,12 @@ struct ChatImage: View {
     }
 
     private func load() async {
-        if let hit = Self.cache.object(forKey: id as NSString) { image = hit; failed = false; return }
+        if let hit = Self.cache.object(forKey: id as NSString) { image = hit; failed = false; settled = true; return }
         switch source {
         case .local(let d):
             image = await Self.decode(d)
             if let image { Self.cache.setObject(image, forKey: id as NSString) }
+            settled = true
         case .remote(let path):
             // Same rule as the web viewer: full size = the path with its first "_thumb" removed
             // ("…&_thumb_k=1" -> "…&_k=1"; e.g. 46x100 thumb vs 1179x2556 full).
@@ -217,6 +230,7 @@ struct ChatImage: View {
                 Self.cache.setObject(img, forKey: id as NSString)
             }
             expired = image == nil && big.gone
+            settled = big.image != nil || big.gone
         }
         failed = image == nil
     }
