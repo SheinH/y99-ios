@@ -46,13 +46,14 @@ struct VoicePanel: View {
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("Recording, \(Self.clock(dictation.seconds))")
                 Button { dictation.stop() } label: {
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .fill(.white)
-                        .frame(width: 20, height: 20)
-                        .frame(width: 56, height: 56)
-                        .tinted(.red, in: Circle())
+                    Image(systemName: "stop.fill")
+                        .font(.system(size: 20))
+                        .frame(width: 34, height: 34)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.glassProminentIfAvailable)
+                .buttonBorderShape(.circle)
+                .controlSize(.large)
+                .tint(.red)
                 .accessibilityLabel("Stop and review")
             }
         }
@@ -94,13 +95,12 @@ struct VoicePanel: View {
                 Button { onSend(dictation.take()) } label: {
                     Label("Send", systemImage: "arrow.up")
                         .font(.body.weight(.semibold))
-                        .foregroundStyle(.white)
-                        .frame(maxWidth: .infinity, minHeight: 48)
-                        .tinted(Color.accentColor, in: Capsule())
+                        .frame(maxWidth: .infinity, minHeight: 34)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.glassProminentIfAvailable)
+                .buttonBorderShape(.capsule)
+                .controlSize(.large)
                 .disabled(!dictation.canSend)
-                .opacity(dictation.canSend ? 1 : 0.4)
             }
         }
     }
@@ -118,18 +118,17 @@ struct VoicePanel: View {
 private struct CircleButton: View {
     let symbol: String
     let action: () -> Void
-    @Environment(\.isEnabled) private var enabled
 
     var body: some View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(.system(size: 18, weight: .medium))
-                .foregroundStyle(.primary)
-                .frame(width: 48, height: 48)
-                .glass(in: Circle())
-                .opacity(enabled ? 1 : 0.4)
+                .frame(width: 34, height: 34)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.glassIfAvailable)
+        .buttonBorderShape(.circle)
+        .controlSize(.large)
+        .tint(.primary)
     }
 }
 
@@ -153,13 +152,17 @@ struct LevelMeter: View {
     }
 }
 
-extension View {
-    /// Tinted Liquid Glass on iOS 26 (Send, Stop); a solid fill before it.
-    @ViewBuilder func tinted(_ color: Color, in shape: some Shape) -> some View {
+extension PrimitiveButtonStyle where Self == GlassProminentIfAvailableStyle {
+    static var glassProminentIfAvailable: GlassProminentIfAvailableStyle { GlassProminentIfAvailableStyle() }
+}
+
+/// Tinted Liquid Glass buttons on iOS 26 (Send, Stop), filled ones before.
+struct GlassProminentIfAvailableStyle: PrimitiveButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
         if #available(iOS 26, *) {
-            glassEffect(.regular.tint(color).interactive(), in: shape)
+            Button(configuration).buttonStyle(.glassProminent)
         } else {
-            background(shape.fill(color))
+            Button(configuration).buttonStyle(.borderedProminent)
         }
     }
 }

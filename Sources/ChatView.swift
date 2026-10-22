@@ -583,6 +583,11 @@ struct ChatView: View {
                     await dictation.start()
                     try? await Task.sleep(for: .seconds(length))
                     dictation.stop()
+                    if ProcessInfo.processInfo.arguments.contains("-autoDiscard") {
+                        try? await Task.sleep(for: .seconds(4))
+                        dictation.discard()
+                        print("DISCARD phase now \(dictation.phase)")
+                    }
                 }
             }
             if ProcessInfo.processInfo.arguments.contains("-fakeTyping") {
