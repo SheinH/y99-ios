@@ -142,10 +142,9 @@ enum ImageSource {
 struct ChatImage: View {
     let id: String
     let source: ImageSource
-    /// The full-size picture wouldn't load from its address (stored links can go stale): ask for a fresh one.
-    var onBroken: (() -> Void)?
     @State private var image: UIImage?
     @State private var failed = false
+    @State private var expired = false   // y99 deleted it and there's no copy here
     @State private var viewing = false
     @Namespace private var zoom
 
@@ -164,7 +163,10 @@ struct ChatImage: View {
                 Color(.systemGray5)
                     .frame(width: 200, height: 150)
                     .overlay {
-                        if failed {
+                        if expired {
+                            Label("Photo expired", systemImage: "clock.badge.xmark")
+                                .font(.subheadline).foregroundStyle(.secondary)
+                        } else if failed {
                             Image(systemName: "photo.badge.exclamationmark").font(.title2).foregroundStyle(.secondary)
                         } else {
                             ProgressView()
@@ -200,26 +202,29 @@ struct ChatImage: View {
                 full.removeSubrange(r)
                 // Skip the thumb when the full size is already on disk.
                 if image == nil, !DiskCache.has(ImageSource.fullKey(id)),
-                   let thumb = await Self.fetch(path, key: ImageSource.thumbKey(id)) { image = thumb }
+                   let thumb = await Self.fetch(path, key: ImageSource.thumbKey(id)).image { image = thumb }
             }
             // Only the full-size image goes in the memory cache: if this load is cancelled (row scrolled
             // away) or fails, the next appearance tries again instead of keeping the blurry thumb.
-            if let big = await Self.fetch(full, key: ImageSource.fullKey(id)) {
-                image = big
-                Self.cache.setObject(big, forKey: id as NSString)
-            } else if !Task.isCancelled, !path.isEmpty {
-                onBroken?()
+            let big = await Self.fetch(full, key: ImageSource.fullKey(id))
+            if let img = big.image {
+                image = img
+                Self.cache.setObject(img, forKey: id as NSString)
             }
+            expired = image == nil && big.gone
         }
         failed = image == nil
     }
 
     // Disk first (by message-id key), then the network; downloads are saved under that key.
     // A photo we just sent is on disk without an address until y99 echoes it, so the path may be empty.
-    private static func fetch(_ path: String, key: String) async -> UIImage? {
+    private static func fetch(_ path: String, key: String) async -> (image: UIImage?, gone: Bool) {
         let url = path.isEmpty ? nil : ImageSource.url(for: path)
-        guard let data = await DiskCache.image(key: key, url: url) else { return nil }
-        return await decode(data)
+        switch await DiskCache.fetch(key: key, url: url) {
+        case .image(let data): return (await decode(data), false)
+        case .gone: return (nil, true)
+        case .failed: return (nil, false)
+        }
     }
 
     private static func decode(_ data: Data) async -> UIImage? {

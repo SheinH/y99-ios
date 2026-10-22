@@ -39,10 +39,6 @@ struct ChatView: View {
     @State private var showingEmoji = false          // emoji panel in the keyboard's place
     @State private var keyboardHeight: CGFloat = 336  // last seen keyboard height (incl. home-indicator area)
     @State private var loadingOlder = false
-    // Stale photo links: message ids waiting for a fresh address, and ids already tried this visit.
-    @State private var relinkWanted: Set<Int> = []
-    @State private var relinkTried: Set<Int> = []
-    @State private var relinking = false
     @State private var reachedStart = false
     @State private var position = ScrollPosition(idType: String.self)
     @State private var friendThumb: String?      // their avatar, from their newest message
@@ -393,7 +389,7 @@ struct ChatView: View {
                 if let video = m.video {
                     ChatVideo(id: m.id, source: video)
                 } else if let image = m.image {
-                    ChatImage(id: m.id, source: image) { if let n = m.serverId { relink(n) } }
+                    ChatImage(id: m.id, source: image)
                 } else {
                     MessageText(text: m.text)
                         .padding(.horizontal, 14).padding(.vertical, 8)
@@ -520,40 +516,6 @@ struct ChatView: View {
             append(arr)
             guard let oldest = arr.compactMap({ Int("\($0["id"] ?? "")") }).min(), oldest > down else { return }
             cursor = oldest
-        }
-    }
-
-    /// Photo addresses are encrypted links that can stop working; stored history keeps the old ones. A photo
-    /// that won't load asks the server for its page of history again (about 20 messages per request, one
-    /// request at a time, spaced out), and the fresh addresses replace the stored ones. Once per message
-    /// per visit, and only while online.
-    func relink(_ id: Int) {
-        guard seed.isEmpty, Connectivity.shared.isOnline, !relinkTried.contains(id) else { return }
-        relinkWanted.insert(id)
-        guard !relinking else { return }
-        relinking = true
-        Task {
-            defer { relinking = false }
-            while let id = relinkWanted.max(), Connectivity.shared.isOnline {
-                relinkWanted.remove(id)
-                relinkTried.insert(id)
-                let r = await API.post("private/fetch", [
-                    "target": friend, "private_last": String(id + 1), "pageUp": "1", "mode": "private",
-                ], auth: session.auth, username: session.username)
-                guard let arr = (r as? [String: Any])?["private"] as? [[String: Any]], !arr.isEmpty else { return }
-                Store.current?.save(chat: friend, arr)
-                for o in arr {
-                    guard let n = Int("\(o["id"] ?? "")") else { continue }
-                    relinkWanted.remove(n)
-                    relinkTried.insert(n)
-                    guard (o["type"] as? String) == "image", let path = o["message"] as? String, !path.isEmpty,
-                          let i = messages.firstIndex(where: { $0.serverId == n }),
-                          case .remote(let old)? = messages[i].image, old != path else { continue }
-                    DebugLog.log("relinked photo \(n)")
-                    messages[i].image = .remote(path: path)   // the image view reloads on the new address
-                }
-                try? await Task.sleep(for: .seconds(1))
-            }
         }
     }
 

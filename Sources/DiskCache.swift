@@ -36,15 +36,26 @@ enum DiskCache {
     /// The image filed under `key`, else downloaded from `url` (y99's image hosts 403 without the Referer)
     /// and filed under it. `url` may be nil when only the cached copy can be used.
     static func image(key: String, url: URL?) async -> Data? {
+        if case .image(let data) = await fetch(key: key, url: url) { return data }
+        return nil
+    }
+
+    /// `gone`: y99 deleted the file (404 "EXPIRED OR DELETED"; photos don't last forever there), so only a
+    /// copy saved here earlier can show it.
+    enum Fetched { case image(Data), gone, failed }
+
+    static func fetch(key: String, url: URL?) async -> Fetched {
         let file = imageFile(key: key)
-        if let data = await Task.detached(operation: { read(file) }).value { return data }
-        guard let url else { return nil }
+        if let data = await Task.detached(operation: { read(file) }).value { return .image(data) }
+        guard let url else { return .failed }
         var req = URLRequest(url: url)
         req.setValue("https://meetyou.me/", forHTTPHeaderField: "Referer")
-        guard let (data, resp) = try? await URLSession.shared.data(for: req),
-              (resp as? HTTPURLResponse)?.statusCode == 200, isImage(data) else { return nil }
+        guard let (data, resp) = try? await URLSession.shared.data(for: req) else { return .failed }
+        let status = (resp as? HTTPURLResponse)?.statusCode
+        if status == 404 { return .gone }
+        guard status == 200, isImage(data) else { return .failed }
         Task.detached(priority: .utility) { write(data, to: file) }
-        return data
+        return .image(data)
     }
 
     /// An error page served with a 200 must never be filed as the picture.
