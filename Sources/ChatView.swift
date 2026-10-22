@@ -108,7 +108,8 @@ struct ChatView: View {
                         .font(.headline)
                         .lineLimit(1)
                 }
-                .padding(.horizontal, 10).padding(.vertical, 4)   // wide enough that the square avatar clears the curve
+                // Same gap left of the avatar as above and below, so it follows the pill's round end.
+                .padding(.leading, 4).padding(.trailing, 10).padding(.vertical, 4)
                 .glass(in: Capsule())
             }
         }
