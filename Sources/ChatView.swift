@@ -233,13 +233,15 @@ struct ChatView: View {
         deliveredId = max(deliveredId, n)
     }
 
-    /// Like the web, a "typing" shows for at most 10 s unless it's repeated; "stopped" or a message ends it.
-    func setPartnerTyping(_ on: Bool) {
+    /// A "typing" shows for at most 10 s unless it's repeated. A "stopped" hides it only after a few quiet
+    /// seconds (they pause mid-sentence, and an on/off/on bubble looks broken); their message hides it at once.
+    func setPartnerTyping(_ on: Bool, now: Bool = false) {
         partnerTypingEnds?.cancel()
-        partnerTyping = on
-        guard on else { return }
+        if on { partnerTyping = true }
+        if now { partnerTyping = false; return }
+        guard partnerTyping else { return }
         partnerTypingEnds = Task {
-            try? await Task.sleep(for: .seconds(10))
+            try? await Task.sleep(for: .seconds(on ? 10 : 4))
             if !Task.isCancelled { partnerTyping = false }
         }
     }
@@ -560,7 +562,7 @@ struct ChatView: View {
             }
             guard let text = o["message"] as? String else { continue }
             seen.insert(id)
-            if !mine && partnerTyping { setPartnerTyping(false) }
+            if !mine && partnerTyping { setPartnerTyping(false, now: true) }
             // type "image" carries the upload path in `message` (deob/app.deob.js:8427); type "attachment"
             // (message "[ATTACHMENT]") names a file on the storage server in `attachmentId` (deob ~52432).
             var image = (o["type"] as? String) == "image" ? ImageSource.remote(path: text) : nil

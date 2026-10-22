@@ -273,15 +273,23 @@ struct ChatImage: View {
 }
 
 // Full-screen viewer: pinch / double-tap to zoom, share, and (iOS 18+) drag down to dismiss.
+// Full-screen photo. One tap hides or shows Done/Share (and the status bar); double-tap or pinch zooms.
+// Dragging down moves only the picture, fades the black away and hides the buttons; let go far enough
+// (or flick) to close. The system's own drag-to-close is turned off because it dragged the buttons too.
 struct ImageViewer: View {
     let image: UIImage
     @Environment(\.dismiss) private var dismiss
+    @State private var chromeHidden = false
+    @State private var dragProgress: CGFloat = 0   // 0 at rest, 1 at the close distance
 
     var body: some View {
         NavigationStack {
-            ZoomableImage(image: image)
+            ZoomableImage(image: image,
+                          onTap: { withAnimation(.easeInOut(duration: 0.2)) { chromeHidden.toggle() } },
+                          onDrag: { dragProgress = $0 },
+                          onClose: { dismiss() })
                 .ignoresSafeArea()
-                .background(Color.black)
+                .background(Color.black.opacity(1 - 0.85 * Double(dragProgress)).ignoresSafeArea())
                 .toolbar {
                     ToolbarItem(placement: .topBarLeading) {
                         Button("Done") { dismiss() }
@@ -290,13 +298,20 @@ struct ImageViewer: View {
                         ShareLink(item: Image(uiImage: image), preview: SharePreview("Photo", image: Image(uiImage: image)))
                     }
                 }
+                .toolbar(chromeHidden || dragProgress > 0 ? .hidden : .visible, for: .navigationBar)
+                .statusBarHidden(chromeHidden)
         }
         .environment(\.colorScheme, .dark)
+        .presentationBackground(.clear)   // the chat shows through as the black fades while dragging
+        .interactiveDismissDisabled()   // also stops the zoom transition's own drag
     }
 }
 
 struct ZoomableImage: UIViewRepresentable {
     let image: UIImage
+    var onTap: () -> Void = {}
+    var onDrag: (CGFloat) -> Void = { _ in }
+    var onClose: () -> Void = {}
 
     func makeUIView(context: Context) -> ZoomView {
         let v = ZoomView()
@@ -304,10 +319,18 @@ struct ZoomableImage: UIViewRepresentable {
         return v
     }
 
-    func updateUIView(_ v: ZoomView, context: Context) { v.imageView.image = image }
+    func updateUIView(_ v: ZoomView, context: Context) {
+        v.imageView.image = image
+        v.onTap = onTap; v.onDrag = onDrag; v.onClose = onClose
+    }
 
     final class ZoomView: UIScrollView, UIScrollViewDelegate {
         let imageView = UIImageView()
+        var onTap: () -> Void = {}
+        var onDrag: (CGFloat) -> Void = { _ in }
+        var onClose: () -> Void = {}
+        private let closeDistance: CGFloat = 140
+        private lazy var pan = UIPanGestureRecognizer(target: self, action: #selector(dragged(_:)))
 
         override init(frame: CGRect) {
             super.init(frame: frame)
@@ -321,6 +344,10 @@ struct ZoomableImage: UIViewRepresentable {
             let doubleTap = UITapGestureRecognizer(target: self, action: #selector(toggleZoom(_:)))
             doubleTap.numberOfTapsRequired = 2
             addGestureRecognizer(doubleTap)
+            let tap = UITapGestureRecognizer(target: self, action: #selector(tapped))
+            tap.require(toFail: doubleTap)
+            addGestureRecognizer(tap)
+            addGestureRecognizer(pan)
         }
         required init?(coder: NSCoder) { fatalError() }
 
@@ -330,6 +357,35 @@ struct ZoomableImage: UIViewRepresentable {
         }
 
         func viewForZooming(in scrollView: UIScrollView) -> UIView? { imageView }
+
+        // The close drag only when not zoomed in (zoomed, a drag pans the picture) and mostly downward.
+        override func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
+            guard g === pan else { return super.gestureRecognizerShouldBegin(g) }
+            let v = pan.velocity(in: self)
+            return zoomScale <= minimumZoomScale + 0.01 && v.y > abs(v.x)
+        }
+
+        @objc private func tapped() { onTap() }
+
+        @objc private func dragged(_ g: UIPanGestureRecognizer) {
+            let t = g.translation(in: self)
+            switch g.state {
+            case .changed:
+                let shrink = 1 - min(max(t.y, 0) / bounds.height, 1) * 0.3
+                imageView.transform = CGAffineTransform(translationX: t.x, y: t.y).scaledBy(x: shrink, y: shrink)
+                onDrag(min(max(t.y, 0) / closeDistance, 1))
+            case .ended, .cancelled:
+                if g.state == .ended, t.y > closeDistance || g.velocity(in: self).y > 900 {
+                    onClose()
+                } else {
+                    UIView.animate(withDuration: 0.35, delay: 0, usingSpringWithDamping: 0.8, initialSpringVelocity: 0) {
+                        self.imageView.transform = .identity
+                    }
+                    onDrag(0)
+                }
+            default: break
+            }
+        }
 
         @objc private func toggleZoom(_ g: UITapGestureRecognizer) {
             if zoomScale > 1 { setZoomScale(1, animated: true); return }
@@ -348,6 +404,7 @@ extension View {
     @ViewBuilder func zoomTransition(_ id: String, _ ns: Namespace.ID) -> some View {
         if #available(iOS 18, *) { navigationTransition(.zoom(sourceID: id, in: ns)) } else { self }
     }
+
 }
 
 // SwiftUI's Image doesn't play animated UIImages; UIImageView does.
