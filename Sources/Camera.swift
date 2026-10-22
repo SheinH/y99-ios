@@ -18,11 +18,12 @@ struct CameraPicker: UIViewControllerRepresentable {
     func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {}
 
     // Add-only access (NSPhotoLibraryAddUsageDescription): the app can save shots but can't read the library.
-    static func saveToLibrary(_ image: UIImage) async {
-        guard await PHPhotoLibrary.requestAuthorization(for: .addOnly) == .authorized else { return }
-        try? await PHPhotoLibrary.shared().performChanges {
-            PHAssetChangeRequest.creationRequestForAsset(from: image)
-        }
+    @discardableResult static func saveToLibrary(_ image: UIImage) async -> Bool {
+        guard await PHPhotoLibrary.requestAuthorization(for: .addOnly) == .authorized else { return false }
+        do {
+            try await PHPhotoLibrary.shared().performChanges { PHAssetChangeRequest.creationRequestForAsset(from: image) }
+            return true
+        } catch { return false }
     }
 
     final class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {

@@ -146,6 +146,9 @@ struct ChatView: View {
                 #if DEBUG
                 if ProcessInfo.processInfo.arguments.contains("-longSeed") {
                     messages = (1...40).map { Msg(id: "\($0)", text: "filler message \($0) :bg_hype:", mine: $0 % 3 == 0, serverId: $0) }
+                        + (ProcessInfo.processInfo.arguments.firstIndex(of: "-imageSeed").flatMap { i in
+                            (try? Data(contentsOf: URL(fileURLWithPath: ProcessInfo.processInfo.arguments[i + 1])))
+                                .map { [Msg(id: "img", text: "", mine: false, image: .local($0), serverId: 42)] } } ?? [])
                         + [Msg(id: "41", text: "look https://example.com/averyveryverylongpathwithoutanyspacesatall/more/stuff/here?x=12345 :bg_hype:", mine: false, serverId: 41)]
                 }
                 #endif

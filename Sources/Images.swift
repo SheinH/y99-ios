@@ -238,6 +238,11 @@ struct ChatImage: View {
             settled = big.image != nil || big.gone
         }
         failed = image == nil
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-openViewer"), let image, viewer == nil {
+            try? await Task.sleep(for: .seconds(1)); viewer = Viewed(image: image)
+        }
+        #endif
     }
 
     /// Only the on-screen size is kept in memory (Lanczos, not the GPU's bilinear squash).
@@ -281,6 +286,9 @@ struct ImageViewer: View {
     @Environment(\.dismiss) private var dismiss
     @State private var chromeHidden = false
     @State private var dragProgress: CGFloat = 0   // 0 at rest, 1 at the close distance
+    @State private var saved: Bool?                 // briefly shows how Save went
+
+    private var chromeShown: Bool { !chromeHidden && dragProgress == 0 }
 
     var body: some View {
         ZoomableImage(image: image,
@@ -293,20 +301,43 @@ struct ImageViewer: View {
                       onClose: { dismiss() })
             .ignoresSafeArea()
             .background(Color.black.opacity(1 - 0.85 * Double(dragProgress)).ignoresSafeArea())
-            // Plain buttons over the picture that fade, not a navigation bar that slides away.
-            .overlay(alignment: .top) {
-                HStack {
-                    Button("Done") { dismiss() }
-                        .buttonStyle(.glassIfAvailable)
-                    Spacer()
-                    ShareLink(item: Image(uiImage: image), preview: SharePreview("Photo", image: Image(uiImage: image))) {
-                        Image(systemName: "square.and.arrow.up")
-                    }
+            // Plain buttons over the picture that fade, not a navigation bar that slides away:
+            // close top right, save and share bottom right.
+            .overlay(alignment: .topTrailing) {
+                Button { dismiss() } label: { Image(systemName: "xmark").frame(width: 24, height: 24) }
                     .buttonStyle(.glassIfAvailable)
+                    .buttonBorderShape(.circle)
+                    .accessibilityLabel("Close")
+                    .padding(.horizontal, 16)
+                    .opacity(chromeShown ? 1 : 0)
+                    .allowsHitTesting(chromeShown)
+            }
+            .overlay(alignment: .bottomTrailing) {
+                HStack(spacing: 12) {
+                    Button {
+                        Task {
+                            let ok = await CameraPicker.saveToLibrary(image)
+                            UINotificationFeedbackGenerator().notificationOccurred(ok ? .success : .error)
+                            withAnimation { saved = ok }
+                            try? await Task.sleep(for: .seconds(1.5))
+                            withAnimation { saved = nil }
+                        }
+                    } label: {
+                        Image(systemName: saved == true ? "checkmark" : saved == false ? "exclamationmark.triangle" : "square.and.arrow.down")
+                            .contentTransition(.symbolEffect(.replace))
+                            .frame(width: 24, height: 24)
+                    }
+                    .accessibilityLabel(saved == true ? "Saved" : "Save Photo")
+                    ShareLink(item: Image(uiImage: image), preview: SharePreview("Photo", image: Image(uiImage: image))) {
+                        Image(systemName: "square.and.arrow.up").frame(width: 24, height: 24)
+                    }
                 }
+                .buttonStyle(.glassIfAvailable)
+                .buttonBorderShape(.circle)
                 .padding(.horizontal, 16)
-                .opacity(chromeHidden || dragProgress > 0 ? 0 : 1)
-                .allowsHitTesting(!(chromeHidden || dragProgress > 0))
+                .padding(.bottom, 8)
+                .opacity(chromeShown ? 1 : 0)
+                .allowsHitTesting(chromeShown)
             }
             .statusBarHidden(chromeHidden)
             .environment(\.colorScheme, .dark)
@@ -336,15 +367,30 @@ struct ZoomableImage: UIViewRepresentable {
     var onDrag: (CGFloat) -> Void = { _ in }
     var onClose: () -> Void = {}
 
-    func makeUIView(context: Context) -> ZoomView {
-        let v = ZoomView()
-        v.imageView.image = image
-        return v
+    func makeUIView(context: Context) -> Holder {
+        let h = Holder()
+        h.zoom.imageView.image = image
+        return h
     }
 
-    func updateUIView(_ v: ZoomView, context: Context) {
+    func updateUIView(_ h: Holder, context: Context) {
+        let v = h.zoom
         v.imageView.image = image
         v.onTap = onTap; v.onDrag = onDrag; v.onClose = onClose
+    }
+
+    // The close drag moves the whole zoom view, so it lives in a plain holder that SwiftUI sizes.
+    // (Moving the picture inside the scroll view didn't stick: the scroll view owns that view's
+    // transform and reset it as the close began, so the picture flashed back to its start for a frame.)
+    final class Holder: UIView {
+        let zoom = ZoomView()
+        override init(frame: CGRect) { super.init(frame: frame); addSubview(zoom) }
+        required init?(coder: NSCoder) { fatalError() }
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            zoom.bounds = CGRect(origin: .zero, size: bounds.size)   // bounds + center: it may be transformed
+            zoom.center = CGPoint(x: bounds.midX, y: bounds.midY)
+        }
     }
 
     final class ZoomView: UIScrollView, UIScrollViewDelegate {
@@ -371,18 +417,23 @@ struct ZoomableImage: UIViewRepresentable {
             tap.require(toFail: doubleTap)
             addGestureRecognizer(tap)
             addGestureRecognizer(pan)
+            #if DEBUG
+            if ProcessInfo.processInfo.arguments.contains("-dragCloseTest") {
+                Task { @MainActor [weak self] in
+                    try? await Task.sleep(for: .seconds(1.5))
+                    UIView.animate(withDuration: 0.3) { self?.transform = CGAffineTransform(translationX: 40, y: 260).scaledBy(x: 0.85, y: 0.85) }
+                    self?.onDrag(1)
+                    try? await Task.sleep(for: .seconds(0.8))
+                    self?.onClose()
+                }
+            }
+            #endif
         }
         required init?(coder: NSCoder) { fatalError() }
 
         override func layoutSubviews() {
             super.layoutSubviews()
-            // bounds + center, not frame: frame is undefined while the close drag has the view transformed,
-            // and setting it then threw the picture to the top of the screen as it closed.
-            if zoomScale == 1 {
-                imageView.bounds = CGRect(origin: .zero, size: bounds.size)
-                imageView.center = CGPoint(x: bounds.width / 2, y: bounds.height / 2)
-                contentSize = bounds.size
-            }
+            if zoomScale == 1 { imageView.frame = bounds; contentSize = bounds.size }
         }
 
         func viewForZooming(in scrollView: UIScrollView) -> UIView? { imageView }
@@ -397,18 +448,18 @@ struct ZoomableImage: UIViewRepresentable {
         @objc private func tapped() { onTap() }
 
         @objc private func dragged(_ g: UIPanGestureRecognizer) {
-            let t = g.translation(in: self)
+            let t = g.translation(in: superview)
             switch g.state {
             case .changed:
                 let shrink = 1 - min(max(t.y, 0) / bounds.height, 1) * 0.3
-                imageView.transform = CGAffineTransform(translationX: t.x, y: t.y).scaledBy(x: shrink, y: shrink)
+                transform = CGAffineTransform(translationX: t.x, y: t.y).scaledBy(x: shrink, y: shrink)
                 onDrag(min(max(t.y, 0) / closeDistance, 1))
             case .ended, .cancelled:
-                if g.state == .ended, t.y > closeDistance || g.velocity(in: self).y > 900 {
+                if g.state == .ended, t.y > closeDistance || g.velocity(in: superview).y > 900 {
                     onClose()
                 } else {
                     UIView.animate(withDuration: 0.35, delay: 0, usingSpringWithDamping: 0.8, initialSpringVelocity: 0) {
-                        self.imageView.transform = .identity
+                        self.transform = .identity
                     }
                     onDrag(0)
                 }
