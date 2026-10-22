@@ -112,9 +112,7 @@ struct ChatView: View {
                 .padding(.leading, 4).padding(.trailing, 10).padding(.vertical, 4)
                 .glass(in: Capsule())
             }
-            if ConnectionBadge.isVisible {
-                ToolbarItem(placement: .topBarTrailing) { ConnectionBadge() }
-            }
+            ToolbarItem(placement: .topBarTrailing) { ConnectionBadge() }
         }
         .onReceive(NotificationCenter.default.publisher(for: .y99Message)) { note in
             guard let o = note.userInfo as? [String: Any],

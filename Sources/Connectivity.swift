@@ -15,7 +15,6 @@ extension Notification.Name {
 
     enum Status { case online, slow, offline }
     @Published private(set) var status: Status = .online
-    @Published private(set) var justReconnected = false   // a moment of "Online" after being offline
     var isOnline: Bool { status != .offline }
     /// The same, readable off the main thread (the socket's callbacks).
     nonisolated(unsafe) static var online = true
@@ -31,7 +30,6 @@ extension Notification.Name {
     private var running = false
     private var lastAlive = Date()
     private var lastRTT: TimeInterval = 0
-    private var calm: Task<Void, Never>?
 
     private init() {
         monitor.pathUpdateHandler = { path in
@@ -96,45 +94,19 @@ extension Notification.Name {
         DebugLog.log("connectivity: \(next)")
         if wasOffline {
             NotificationCenter.default.post(name: .y99Online, object: nil)
-            withAnimation { justReconnected = true }
-            calm?.cancel()
-            calm = Task {
-                try? await Task.sleep(for: .seconds(2))
-                if !Task.isCancelled { withAnimation { justReconnected = false } }
-            }
-        } else if next == .offline {
-            calm?.cancel()
-            justReconnected = false
         }
     }
 }
 
-// Top-right status, Apple style: silent while all is well, a red "Offline" or yellow "Slow" when not,
-// and a green "Online" for a moment when the connection comes back.
+// Top-right status: one colored symbol, always in the same spot (the toolbar gives it its glass circle).
+// The globe, not Wi-Fi: the status bar already shows Wi-Fi, and this covers cellular too.
 struct ConnectionBadge: View {
     @ObservedObject private var c = Connectivity.shared
 
-    static var isVisible: Bool {
-        let c = Connectivity.shared
-        return c.status != .online || c.justReconnected
-    }
-
     var body: some View {
-        Group {
-            switch c.status {
-            case .offline: badge("Offline", "wifi.slash", .red)
-            case .slow: badge("Slow", "wifi.exclamationmark", .yellow)
-            case .online: badge("Online", "wifi", .green)
-            }
-        }
-        .accessibilityElement(children: .combine)
-    }
-
-    private func badge(_ text: String, _ symbol: String, _ color: Color) -> some View {
-        HStack(spacing: 4) {
-            Image(systemName: symbol).foregroundStyle(color)
-            Text(text).font(.subheadline.weight(.semibold))
-        }
-        .fixedSize()
+        Image(systemName: c.status == .offline ? "network.slash" : "network")
+            .foregroundStyle(c.status == .offline ? .red : c.status == .slow ? .yellow : .green)
+            .contentTransition(.symbolEffect(.replace))
+            .accessibilityLabel(c.status == .offline ? "Offline" : c.status == .slow ? "Slow connection" : "Online")
     }
 }

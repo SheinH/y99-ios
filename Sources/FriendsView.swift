@@ -67,9 +67,7 @@ struct FriendsView: View {
                             .accessibilityLabel("Set Up Notifications")
                     }
                 }
-                if ConnectionBadge.isVisible {
-                    ToolbarItem(placement: .topBarTrailing) { ConnectionBadge() }
-                }
+                ToolbarItem(placement: .topBarTrailing) { ConnectionBadge() }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         Section(session.username) {
