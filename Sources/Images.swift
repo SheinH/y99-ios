@@ -151,6 +151,8 @@ struct ChatImage: View {
     @State private var attempt = 0
     private static let retryDelays: [Double] = [2, 5, 15, 30]
     @State private var viewing = false
+    @State private var viewerImage: UIImage?   // full size, read from disk only while the viewer is open
+    @Environment(\.displayScale) private var scale
     @Namespace private var zoom
 
     private static let cache = NSCache<NSString, UIImage>()
@@ -165,7 +167,7 @@ struct ChatImage: View {
                 AnimatedImageView(image: image)
                     .frame(width: fitted(image.size).width, height: fitted(image.size).height)
                     .contentShape(Rectangle())
-                    .onTapGesture { viewing = true }
+                    .onTapGesture { Task { viewerImage = await fullSize() ?? image; viewing = true } }
             } else if expired {
                 // Gone for good: a quiet note, not a placeholder box for a picture that will never come.
                 Label("Photo expired", systemImage: Self.expiredSymbol)
@@ -187,8 +189,8 @@ struct ChatImage: View {
         }
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .zoomSource(id, zoom)
-        .fullScreenCover(isPresented: $viewing) {
-            if let image { ImageViewer(image: image).zoomTransition(id, zoom) }
+        .fullScreenCover(isPresented: $viewing, onDismiss: { viewerImage = nil }) {
+            if let viewerImage { ImageViewer(image: viewerImage).zoomTransition(id, zoom) }
         }
         .task(id: "\(id)|\(source.key)|\(attempt)") {   // also reloads when the address arrives
             await load()
@@ -209,7 +211,7 @@ struct ChatImage: View {
         if let hit = Self.cache.object(forKey: id as NSString) { image = hit; failed = false; settled = true; return }
         switch source {
         case .local(let d):
-            image = await Self.decode(d)
+            if let img = await Self.decode(d) { image = await shrunk(img) }
             if let image { Self.cache.setObject(image, forKey: id as NSString) }
             settled = true
         case .remote(let path):
@@ -220,19 +222,36 @@ struct ChatImage: View {
                 full.removeSubrange(r)
                 // Skip the thumb when the full size is already on disk.
                 if image == nil, !DiskCache.has(ImageSource.fullKey(id)),
-                   let thumb = await Self.fetch(path, key: ImageSource.thumbKey(id)).image { image = thumb }
+                   let thumb = await Self.fetch(path, key: ImageSource.thumbKey(id)).image { image = await shrunk(thumb) }
             }
             // Only the full-size image goes in the memory cache: if this load is cancelled (row scrolled
             // away) or fails, the next appearance tries again instead of keeping the blurry thumb.
             let big = await Self.fetch(full, key: ImageSource.fullKey(id))
             if let img = big.image {
-                image = img
-                Self.cache.setObject(img, forKey: id as NSString)
+                let small = await shrunk(img)
+                image = small
+                Self.cache.setObject(small, forKey: id as NSString)
             }
             expired = image == nil && big.gone
             settled = big.image != nil || big.gone
         }
         failed = image == nil
+    }
+
+    /// Only the on-screen size is kept in memory (Lanczos, not the GPU's bilinear squash).
+    private func shrunk(_ img: UIImage) async -> UIImage {
+        await Lanczos.shrink(img, toPoints: fitted(img.size), scale: scale)
+    }
+
+    /// The full picture for the viewer: from the message itself or the disk cache.
+    private func fullSize() async -> UIImage? {
+        switch source {
+        case .local(let d): return await Self.decode(d)
+        case .remote:
+            let file = DiskCache.imageFile(key: ImageSource.fullKey(id))
+            guard let data = await Task.detached(operation: { DiskCache.read(file) }).value else { return nil }
+            return await Self.decode(data)
+        }
     }
 
     // Disk first (by message-id key), then the network; downloads are saved under that key.

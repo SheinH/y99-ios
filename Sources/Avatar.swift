@@ -48,11 +48,12 @@ struct AvatarView: View {
     let thumb: String?
     var full: UIImage?   // set once the full size has been fetched
     var size: CGFloat = 30
-    @State private var image: UIImage?
+    @State private var image: UIImage?   // shrunk to the circle's pixels
+    @Environment(\.displayScale) private var scale
 
     var body: some View {
         Group {
-            if let image = full ?? image {
+            if let image {
                 Image(uiImage: image).resizable().scaledToFill()
             } else {
                 Color(.systemGray4).overlay {
@@ -62,10 +63,13 @@ struct AvatarView: View {
         }
         .frame(width: size, height: size)
         .clipShape(Circle())
-        .task(id: thumb) {
-            guard let thumb else { image = nil; return }
-            if let full = await Avatar.cachedFull(thumb) { image = full; return }
-            image = await Avatar.thumbImage(thumb)
+        .task(id: "\(thumb ?? "")|\(full != nil)") {
+            var source = full
+            if source == nil, let thumb { source = await Avatar.cachedFull(thumb) }
+            if source == nil, let thumb { source = await Avatar.thumbImage(thumb) }
+            guard let source else { image = nil; return }
+            let box = CGSize(width: size, height: size)
+            image = await Lanczos.shrink(source, toPoints: Lanczos.fill(source.size, covering: box), scale: scale)
         }
     }
 }
