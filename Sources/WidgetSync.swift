@@ -18,6 +18,7 @@ import WidgetKit
             people.append(.init(name: name, thumbURL: thumb.flatMap { Avatar.url($0)?.absoluteString }, thumb: thumb))
         }
         WidgetShared.save(people)
+        Y99Shortcuts.updateAppShortcutParameters()   // Siri/Spotlight learn the friend names
 
         var changed = false
         // Any high-res picture already in the app's cache goes over now (no network), so a widget added
