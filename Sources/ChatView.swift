@@ -48,6 +48,7 @@ struct ChatView: View {
     @State private var reporter: TypingReporter?   // our typing -> partner
     @State private var partnerTyping = false
     @State private var partnerTypingEnds: Task<Void, Never>?
+    @State private var atNewest = true   // scrolled to the newest message (the thread's start)
 
     @Namespace private var zoom
 
@@ -59,7 +60,7 @@ struct ChatView: View {
     var chat: some View {
             ScrollView {
                 LazyVStack(spacing: 0) {
-                    if partnerTyping { TypingBubble().padding(.top, 10).flipped() }
+                    if partnerTyping { TypingBubble().padding(.top, 10).flipped().transition(.opacity) }
                     let lastMine = messages.lastIndex(where: \.mine)
                     // Identify rows by message id, not position: history inserts shift positions, which
                     // would hand a row (and its in-flight image load) to a different message.
@@ -85,15 +86,23 @@ struct ChatView: View {
                 .padding(.vertical, 8)
             }
             .scrollPosition($position)
+            .onScrollGeometryChange(for: Bool.self) { g in g.contentOffset.y + g.contentInsets.top < 80 } action: { _, near in
+                atNewest = near
+            }
             .shiftProbe("scroll")
             .noScrollEdgeEffect()
             .flipped()
             // Rows fade out under the top bar, like Messages (stands in for the edge blur the flip loses).
             .overlay(alignment: .top) { TopFade() }
             .scrollDismissesKeyboard(.interactively)
-            // My own new message brings the thread back to the newest, even when scrolled up.
+            // My own new message brings the thread back to the newest, even when scrolled up; theirs and
+            // the typing bubble do when you're already there (the scroll position otherwise holds on to the
+            // message you were looking at, leaving the new row hidden under the composer).
             .onChange(of: messages.last?.id) {
-                if messages.last?.mine == true { withAnimation { position.scrollTo(edge: .top) } }
+                if messages.last?.mine == true || atNewest { withAnimation { position.scrollTo(edge: .top) } }
+            }
+            .onChange(of: partnerTyping) {
+                if partnerTyping && atNewest { withAnimation { position.scrollTo(edge: .top) } }
             }
             // An inset (rather than a stacked view) so rows pass behind the glass composer.
             .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -251,11 +260,11 @@ struct ChatView: View {
     /// Like the web, a "typing" shows for at most 10 s unless it's repeated; "stopped" or a message ends it.
     func setPartnerTyping(_ on: Bool) {
         partnerTypingEnds?.cancel()
-        partnerTyping = on
+        if partnerTyping != on { withAnimation(.easeInOut(duration: 0.2)) { partnerTyping = on } }
         guard on else { return }
         partnerTypingEnds = Task {
             try? await Task.sleep(for: .seconds(10))
-            if !Task.isCancelled { partnerTyping = false }
+            if !Task.isCancelled { withAnimation(.easeInOut(duration: 0.2)) { partnerTyping = false } }
         }
     }
 
@@ -591,6 +600,16 @@ struct ChatView: View {
                         try? await Task.sleep(for: .seconds(4))
                         dictation.discard()
                         print("DISCARD phase now \(dictation.phase)")
+                    }
+                }
+            }
+            if ProcessInfo.processInfo.arguments.contains("-typingLoop") {
+                // Partner typing on for 2 s, off for 1.5 s, over and over.
+                Task {
+                    try? await Task.sleep(for: .seconds(2))
+                    while true {
+                        setPartnerTyping(true); try? await Task.sleep(for: .seconds(2))
+                        setPartnerTyping(false); try? await Task.sleep(for: .seconds(1.5))
                     }
                 }
             }

@@ -44,20 +44,17 @@ import SwiftUI
 
 // Three pulsing dots in an incoming bubble while the other person is typing.
 struct TypingBubble: View {
+    // A symbol effect rather than a per-frame redraw: the animation runs on its own without
+    // re-rendering (and re-laying out) the thread 60-120 times a second.
     var body: some View {
-        TimelineView(.animation) { t in
-            let phase = t.date.timeIntervalSinceReferenceDate * 2 * .pi / 1.2
-            HStack(spacing: 4) {
-                ForEach(0..<3) { i in
-                    Circle().frame(width: 8, height: 8)
-                        .opacity(0.35 + 0.65 * max(0, sin(phase - Double(i) * 0.9)))
-                }
-            }
+        Image(systemName: "ellipsis")
+            .font(.system(size: 24, weight: .black))
+            .symbolEffect(.variableColor.iterative.dimInactiveLayers.nonReversing, options: .repeating)
             .foregroundStyle(.secondary)
+            .frame(width: 34, height: 8)
             .padding(.horizontal, 14).padding(.vertical, 13)
             .background(BubbleShape(mine: false, tail: true).fill(Color(.systemGray5)))
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .accessibilityLabel("Typing")
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityLabel("Typing")
     }
 }
