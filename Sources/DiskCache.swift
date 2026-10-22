@@ -1,5 +1,6 @@
 import Foundation
 import CryptoKit
+import ImageIO
 
 // Shared on-disk media cache (images here, video/attachment files in Caches/attachments via Attachments),
 // kept under 500 MB together. Reading a file bumps its date, so the least recently viewed go first.
@@ -41,9 +42,15 @@ enum DiskCache {
         var req = URLRequest(url: url)
         req.setValue("https://meetyou.me/", forHTTPHeaderField: "Referer")
         guard let (data, resp) = try? await URLSession.shared.data(for: req),
-              (resp as? HTTPURLResponse)?.statusCode == 200, !data.isEmpty else { return nil }
+              (resp as? HTTPURLResponse)?.statusCode == 200, isImage(data) else { return nil }
         Task.detached(priority: .utility) { write(data, to: file) }
         return data
+    }
+
+    /// An error page served with a 200 must never be filed as the picture.
+    static func isImage(_ data: Data) -> Bool {
+        guard let src = CGImageSourceCreateWithData(data as CFData, nil) else { return false }
+        return CGImageSourceGetType(src) != nil && CGImageSourceGetCount(src) > 0
     }
 
     static func touch(_ file: URL) {

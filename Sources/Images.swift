@@ -142,6 +142,8 @@ enum ImageSource {
 struct ChatImage: View {
     let id: String
     let source: ImageSource
+    /// The full-size picture wouldn't load from its address (stored links can go stale): ask for a fresh one.
+    var onBroken: (() -> Void)?
     @State private var image: UIImage?
     @State private var failed = false
     @State private var viewing = false
@@ -205,6 +207,8 @@ struct ChatImage: View {
             if let big = await Self.fetch(full, key: ImageSource.fullKey(id)) {
                 image = big
                 Self.cache.setObject(big, forKey: id as NSString)
+            } else if !Task.isCancelled, !path.isEmpty {
+                onBroken?()
             }
         }
         failed = image == nil
