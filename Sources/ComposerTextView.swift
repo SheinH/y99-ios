@@ -32,8 +32,9 @@ struct ComposerTextView: UIViewRepresentable {
     func updateUIView(_ v: UITextView, context: Context) {
         context.coordinator.parent = self
         if v.text != text {
-            v.text = text
+            Self.replaceChangedTail(v, with: text)
             v.selectedRange = NSRange(location: (text as NSString).length, length: 0)
+            Self.showEnd(v)   // text set from outside (dictation, emoji) keeps the newest line in view
         }
         // Swap the input view in place; reloadInputViews animates it like a keyboard change.
         if showEmoji != (v.inputView != nil) {
@@ -52,12 +53,50 @@ struct ComposerTextView: UIViewRepresentable {
     // Grow with the text up to five lines, then scroll.
     func sizeThatFits(_ proposal: ProposedViewSize, uiView v: UITextView, context: Context) -> CGSize? {
         guard let width = proposal.width, width > 0 else { return nil }
-        let full = v.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude)).height
+        // Measured from the text itself: the text view's own sizeThatFits answers differently once
+        // scrolling is on, which flipped scrolling off and on (and the view back to the top) as it filled.
+        let inset = v.textContainerInset, pad = v.textContainer.lineFragmentPadding * 2
+        let textWidth = max(1, width - inset.left - inset.right - pad)
+        let lineHeight0 = v.font?.lineHeight ?? 20
+        let measured = v.attributedText.boundingRect(with: CGSize(width: textWidth, height: .greatestFiniteMagnitude),
+                                                     options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil).height
+        let endsWithNewline = v.text.hasSuffix("\n")   // the caret's empty last line isn't in the measurement
+        let full = (max(measured, lineHeight0) + (endsWithNewline ? lineHeight0 : 0)).rounded(.up) + inset.top + inset.bottom
         let lineHeight = v.font?.lineHeight ?? 20
         let cap = lineHeight * Self.maxLines + v.textContainerInset.top + v.textContainerInset.bottom
         let scrolls = full > cap
-        if v.isScrollEnabled != scrolls { DispatchQueue.main.async { v.isScrollEnabled = scrolls } }
+        // SwiftUI also asks at trial widths (a very wide one fits everything on one line); only the
+        // width the view really has may switch scrolling, or each update flipped it off and back to the top.
+        let realWidth = v.bounds.width == 0 || abs(width - v.bounds.width) < 1
+        if realWidth, v.isScrollEnabled != scrolls {
+            DispatchQueue.main.async { v.isScrollEnabled = scrolls; if scrolls { Self.showEnd(v) } }
+        }
         return CGSize(width: width, height: min(full, cap))
+    }
+
+    /// Swaps only what changed after the common start: setting `text` wholesale jumps a scrolling text
+    /// view back to the top, and dictation rewrites its last words many times a second.
+    static func replaceChangedTail(_ v: UITextView, with text: String) {
+        let old = (v.text ?? "") as NSString, new = text as NSString
+        var common = 0
+        let limit = min(old.length, new.length)
+        while common < limit, old.character(at: common) == new.character(at: common) { common += 1 }
+        // Don't split a surrogate pair / composed character.
+        if common > 0, common < limit { common = old.rangeOfComposedCharacterSequence(at: common).location }
+        let replacement = NSAttributedString(string: new.substring(from: common), attributes: v.typingAttributes)
+        v.textStorage.replaceCharacters(in: NSRange(location: common, length: old.length - common), with: replacement)
+    }
+
+    /// Scrolls to the last line, now and after the pending layout (the new height lands a pass later).
+    static func showEnd(_ v: UITextView) {
+        func scroll() {
+            guard v.isScrollEnabled else { return }
+            v.layoutIfNeeded()
+            let bottom = max(0, v.contentSize.height - v.bounds.height + v.adjustedContentInset.bottom)
+            if abs(v.contentOffset.y - bottom) > 0.5 { v.setContentOffset(CGPoint(x: 0, y: bottom), animated: false) }
+        }
+        scroll()
+        DispatchQueue.main.async { scroll() }
     }
 
     final class Coordinator: NSObject, UITextViewDelegate {
