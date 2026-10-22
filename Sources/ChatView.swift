@@ -160,6 +160,7 @@ struct ChatView: View {
                 append(store.messages(chat: friend, limit: 100), persist: false)
             }
             Whatsup.shared.chat = .init(target: friend, privateLast: lastId) { dict in handle(dict) }
+            Task { await refreshLatest() }
             Whatsup.shared.pollNow()
             await watchReadReceipts()
         }
@@ -174,6 +175,10 @@ struct ChatView: View {
             lastEdit = draft.isEmpty ? nil : now
         }
         .onChange(of: [readId, deliveredId, markedSeen]) { saveState() }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+            guard seed.isEmpty else { return }
+            Task { await refreshLatest() }
+        }
         .onChange(of: draft) { saveState() }
         .onChange(of: lastId) { if Whatsup.shared.chat?.target == friend { Whatsup.shared.chat?.privateLast = lastId } }
         .onReceive(NotificationCenter.default.publisher(for: .y99Seen)) { note in
@@ -360,6 +365,21 @@ struct ChatView: View {
         guard let dict = r as? [String: Any], let value = dict["private"] else { return } // failed/captcha: retry on next scroll
         guard let arr = value as? [[String: Any]], !arr.isEmpty else { reachedStart = true; return }
         append(arr)
+    }
+
+    /// Re-reads the newest page of the thread (my messages too: whatsup's `private` only brings the other
+    /// person's new messages, so my own sends from before an app kill, or from the website, come from here).
+    /// `private_last` far above any id returns the latest 20. Pages back further if they're all new.
+    func refreshLatest() async {
+        let stored = Store.current?.newestId(chat: friend)
+        let r = await API.post("private/fetch", [
+            "target": friend, "private_last": "2000000000", "pageUp": "1", "mode": "private",
+        ], auth: session.auth, username: session.username)
+        guard let arr = (r as? [String: Any])?["private"] as? [[String: Any]], !arr.isEmpty else { return }
+        append(arr)
+        if let stored, let oldest = arr.compactMap({ Int("\($0["id"] ?? "")") }).min(), oldest > stored {
+            await fillGap(below: oldest, down: stored)
+        }
     }
 
     /// Pages `private/fetch` backwards from `below` until reaching ids at or under `down` (max 10 pages).
