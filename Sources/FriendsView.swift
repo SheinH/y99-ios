@@ -36,8 +36,8 @@ struct FriendsView: View {
                 let favs = friends.filter { favorites.contains($0.username) }
                 let others = friends.filter { !favorites.contains($0.username) }
                 if !favs.isEmpty {
-                    Section { ForEach(favs) { row($0) } } header: { Label("Favorites", systemImage: "star.fill") }
-                    Section { ForEach(others) { row($0) } } header: { Label("Friends", systemImage: "person.2.fill") }
+                    Section { ForEach(favs) { row($0) } } header: { header("Favorites", "star.fill") }
+                    Section { ForEach(others) { row($0) } } header: { header("Others", "person.2.fill") }
                 } else {
                     ForEach(others) { row($0) }
                 }
@@ -51,14 +51,28 @@ struct FriendsView: View {
                 path = [who]
             }
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Link(destination: PushRelay.setupURL) {
-                        Image(systemName: PushRelay.isSetUp ? "bell.fill" : "bell")
+                // Until notifications are set up, a visible nudge; afterwards it lives in the account menu.
+                if !PushRelay.isSetUp {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Link(destination: PushRelay.setupURL) { Image(systemName: "bell.badge") }
+                            .accessibilityLabel("Set Up Notifications")
                     }
-                    .accessibilityLabel("Set up notifications")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Log out") { Task { await session.signOut() } }
+                    Menu {
+                        Section(session.username) {
+                            // Opens the Y99 Alerts web app, which (re)connects push notifications.
+                            Link(destination: PushRelay.setupURL) {
+                                Label(PushRelay.isSetUp ? "Reconnect Notifications" : "Set Up Notifications", systemImage: "bell")
+                            }
+                            Button(role: .destructive) { Task { await session.signOut() } } label: {
+                                Label("Log Out", systemImage: "rectangle.portrait.and.arrow.right")
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "person.crop.circle")
+                    }
+                    .accessibilityLabel("Account")
                 }
             }
             .onAppear { favorites = Store.current?.favorites() ?? [] }
@@ -67,6 +81,13 @@ struct FriendsView: View {
             .onReceive(NotificationCenter.default.publisher(for: .y99CaptchaDone)) { _ in
                 Task { await load() }
             }
+        }
+    }
+
+    func header(_ title: String, _ symbol: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: symbol)
+            Text(title)
         }
     }
 
