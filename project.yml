@@ -44,4 +44,5 @@ targets:
         # light #CF38A8 (for #007AFF), dark #D347AD (for #0A84FF).
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         INFOPLIST_KEY_NSCameraUsageDescription: Take a photo to send in a chat.
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: Dictate messages; your speech is sent to the transcription service you set up.
         INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription: Save photos you take to your library.

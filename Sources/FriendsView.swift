@@ -27,6 +27,7 @@ struct FriendsView: View {
     @State private var friends: [Friend] = []
     @State private var path: [String] = []
     @State private var favorites: Set<String> = []
+    @State private var dictationSettings = false
     @ObservedObject private var notifier = Notifier.shared
     @ObservedObject private var connectivity = Connectivity.shared   // the toolbar's status badge
 
@@ -75,6 +76,7 @@ struct FriendsView: View {
                             Link(destination: PushRelay.setupURL) {
                                 Label(PushRelay.isSetUp ? "Reconnect Notifications" : "Set Up Notifications", systemImage: "bell")
                             }
+                            Button { dictationSettings = true } label: { Label("Dictation", systemImage: "mic") }
                             Button(role: .destructive) { Task { await session.signOut() } } label: {
                                 Label("Log Out", systemImage: "rectangle.portrait.and.arrow.right")
                             }
@@ -86,6 +88,7 @@ struct FriendsView: View {
                 }
             }
             .onAppear { favorites = Store.current?.favorites() ?? [] }
+            .sheet(isPresented: $dictationSettings) { DictationSettingsView() }
             .refreshable { await load() }
             .task { await load() }
             .onReceive(NotificationCenter.default.publisher(for: .y99CaptchaDone)) { _ in

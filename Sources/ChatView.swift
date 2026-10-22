@@ -29,6 +29,8 @@ struct ChatView: View {
     @State private var markedSeen = 0   // newest of their messages we've told the server we read
     @State private var photo: PhotosPickerItem?
     @State private var pickingFile = false
+    @StateObject private var dictation = Dictation()
+    @State private var canDictate = false   // set up in the account menu > Dictation
     @ObservedObject private var connectivity = Connectivity.shared
     @State private var typingMs: Double = 0      // web's lkSpent: time between edits, gaps under 5s only
     @State private var lastEdit: Date?
@@ -164,8 +166,12 @@ struct ChatView: View {
             Whatsup.shared.pollNow()
             await watchReadReceipts()
         }
-        .onAppear { Notifier.shared.activeChat = friend }
+        .onAppear {
+            Notifier.shared.activeChat = friend
+            canDictate = DictationSettings.isSetUp
+        }
         .onDisappear {
+            dictation.cancel()
             if Notifier.shared.activeChat == friend { Notifier.shared.activeChat = nil }
             reporter?.stop()
             if Whatsup.shared.chat?.target == friend { Whatsup.shared.chat = nil }
@@ -294,8 +300,39 @@ struct ChatView: View {
                 }
             }
             field
+            if canDictate { micButton }
         }
         .padding(.horizontal, 16).padding(.vertical, 8)
+    }
+
+    // Dictation: tap to talk, tap again to stop. The words land in the message as they form.
+    var micButton: some View {
+        Button {
+            switch dictation.state {
+            case .idle:
+                dictation.onText = { draft = $0 }
+                Task { await dictation.start(after: draft) }
+            case .listening: dictation.stop()
+            case .finishing: break
+            }
+        } label: {
+            Group {
+                switch dictation.state {
+                case .idle: Image(systemName: "mic").foregroundStyle(.primary)
+                case .listening:
+                    Image(systemName: "waveform").foregroundStyle(.red)
+                        .symbolEffect(.variableColor.iterative, isActive: true)
+                case .finishing: ProgressView()
+                }
+            }
+            .font(.system(size: 17, weight: .medium))
+            .frame(width: 38, height: 38)
+            .glass(in: Circle())
+        }
+        .accessibilityLabel(dictation.state == .listening ? "Stop Dictation" : "Dictate")
+        .alert("Dictation", isPresented: Binding(get: { dictation.error != nil }, set: { if !$0 { dictation.error = nil } })) {
+            Button("OK") {}
+        } message: { Text(dictation.error ?? "") }
     }
 
     var field: some View {
@@ -534,6 +571,7 @@ struct ChatView: View {
     func send() {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
+        dictation.cancel()   // nothing more of it may land in the next message
         draft = ""
         let seconds = typingMs / 1000
         typingMs = 0; lastEdit = nil
