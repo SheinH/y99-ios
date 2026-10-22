@@ -170,7 +170,7 @@ struct ChatImage: View {
                     .frame(width: fitted(image.size).width, height: fitted(image.size).height)
                     .contentShape(Rectangle())
                     .onTapGesture {
-                        Task { if let full = await fullSize() ?? image { viewer = Viewed(image: full) } }
+                        Task { viewer = Viewed(image: await fullSize() ?? image) }
                     }
             } else if expired {
                 // Gone for good: a quiet note, not a placeholder box for a picture that will never come.
