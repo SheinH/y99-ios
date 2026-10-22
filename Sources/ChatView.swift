@@ -108,6 +108,8 @@ struct ChatView: View {
                         .font(.headline)
                         .lineLimit(1)
                 }
+                .padding(.leading, 4).padding(.trailing, 14).padding(.vertical, 4)
+                .glass(in: Capsule())
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .y99Message)) { note in
