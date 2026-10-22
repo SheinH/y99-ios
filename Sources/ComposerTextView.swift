@@ -75,7 +75,7 @@ struct ComposerTextView: UIViewRepresentable {
                 c.allowsSelfSizing = false
                 let h = UIHostingController(rootView: EmojiPanel { [weak self] code in self?.parent.onEmoji(code) })
                 h.sizingOptions = []
-                h.view.backgroundColor = .systemGray6
+                h.view.backgroundColor = .clear
                 h.view.frame = c.bounds
                 h.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
                 c.addSubview(h.view)

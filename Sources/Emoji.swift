@@ -381,7 +381,6 @@ struct EmojiPanel: View {
             }
             .id(tab)   // each tab starts at the top
         }
-        .background(Color(.systemGray6))
     }
 
     @ViewBuilder private func button(_ code: String) -> some View {
