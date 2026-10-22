@@ -43,7 +43,7 @@ enum Avatar {
     }
 }
 
-// Round avatar for the chat header: the cached full size if we have it (sharper), else the thumb.
+// Rounded-square avatar for the chat header: the cached full size if we have it (sharper), else the thumb.
 struct AvatarView: View {
     let thumb: String?
     var full: UIImage?   // set once the full size has been fetched
@@ -55,11 +55,13 @@ struct AvatarView: View {
             if let image = full ?? image {
                 Image(uiImage: image).resizable().scaledToFill()
             } else {
-                Image(systemName: "person.crop.circle.fill").resizable().foregroundStyle(.secondary)
+                Color(.systemGray4).overlay {
+                    Image(systemName: "person.fill").resizable().scaledToFit().padding(size * 0.22).foregroundStyle(.white)
+                }
             }
         }
         .frame(width: size, height: size)
-        .clipShape(Circle())
+        .clipShape(RoundedRectangle(cornerRadius: size * 0.28, style: .continuous))
         .task(id: thumb) {
             guard let thumb else { image = nil; return }
             if let full = await Avatar.cachedFull(thumb) { image = full; return }

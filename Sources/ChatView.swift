@@ -45,18 +45,14 @@ struct ChatView: View {
     @State private var partnerTyping = false
     @State private var partnerTypingEnds: Task<Void, Never>?
 
-    var body: some View {
-        observers(chat)
-            .fullScreenCover(isPresented: $viewingAvatar) {
-                if let avatarImage { ImageViewer(image: avatarImage) }
-            }
-    }
+    @Namespace private var zoom
+
+    var body: some View { observers(chat) }
 
     // The thread is drawn upside down (and each row flipped back), like most chat apps: its start is the
     // newest message at the bottom, so it opens there, new messages appear without scrolling, history pages
     // in at the far end, and the keyboard or emoji panel shrinking the view leaves the newest in place.
     var chat: some View {
-        VStack(spacing: 0) {
             ScrollView {
                 LazyVStack(spacing: 0) {
                     if partnerTyping { TypingBubble().padding(.top, 10).flipped() }
@@ -85,20 +81,23 @@ struct ChatView: View {
             .scrollPosition($position)
             .noScrollEdgeEffect()
             .flipped()
-            .clipped()   // without the edge blur, rows would show through the bar
+            // Rows fade out under the top bar, like Messages (stands in for the edge blur the flip loses).
+            .overlay(alignment: .top) { TopFade() }
             .scrollDismissesKeyboard(.interactively)
             // My own new message brings the thread back to the newest, even when scrolled up.
             .onChange(of: messages.last?.id) {
                 if messages.last?.mine == true { withAnimation { position.scrollTo(edge: .top) } }
             }
-            composer
-                // Remember the real keyboard's height so the emoji panel matches it.
-                .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { note in
-                    if !showingEmoji, let f = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect, f.height > 100 {
-                        keyboardHeight = f.height
+            // An inset (rather than a stacked view) so rows pass behind the glass composer.
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                composer
+                    // Remember the real keyboard's height so the emoji panel matches it.
+                    .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { note in
+                        if !showingEmoji, let f = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect, f.height > 100 {
+                            keyboardHeight = f.height
+                        }
                     }
-                }
-        }
+            }
         .navigationTitle(friend)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -234,6 +233,11 @@ struct ChatView: View {
             AvatarView(thumb: friendThumb, full: avatarImage)
         }
         .buttonStyle(.plain)
+        // Grows out of the avatar, like photos in the thread.
+        .zoomSource("avatar", zoom)
+        .fullScreenCover(isPresented: $viewingAvatar) {
+            if let avatarImage { ImageViewer(image: avatarImage).zoomTransition("avatar", zoom) }
+        }
         .accessibilityLabel("\(friend)'s profile picture")
         .onChange(of: friendThumb) { avatarImage = nil }   // they changed it
     }
@@ -252,8 +256,7 @@ struct ChatView: View {
                     .font(.system(size: 17, weight: .medium))
                     .foregroundStyle(.primary)
                     .frame(width: 38, height: 38)
-                    .background(Circle().fill(Color(.systemBackground)))
-                    .overlay(Circle().strokeBorder(Color(.systemGray4)))
+                    .glass(in: Circle())
             }
             // .current keeps the original bytes (e.g. HEIC) so ImagePrep does the conversion, not Photos.
             .photosPicker(isPresented: $pickingPhoto, selection: $photo, matching: .any(of: [.images, .videos]),
@@ -314,8 +317,7 @@ struct ChatView: View {
             }
         }
         .frame(minHeight: 38)
-        .background(RoundedRectangle(cornerRadius: 19, style: .continuous).fill(Color(.systemBackground)))
-        .overlay(RoundedRectangle(cornerRadius: 19, style: .continuous).strokeBorder(Color(.systemGray4)))
+        .glass(in: RoundedRectangle(cornerRadius: 19, style: .continuous))
     }
 
     @ViewBuilder
@@ -591,8 +593,34 @@ extension View {
     func flipped() -> some View { scaleEffect(x: 1, y: -1) }
 
     /// iOS 26 blurs scroll content at the bars; on the flipped thread that lands on the wrong edges.
+    /// Liquid Glass on iOS 26; a plain outlined shape before it.
+    @ViewBuilder func glass(in shape: some Shape) -> some View {
+        if #available(iOS 26, *) {
+            glassEffect(.regular.interactive(), in: shape)
+        } else {
+            background(shape.fill(Color(.systemBackground))).overlay(shape.stroke(Color(.systemGray4)))
+        }
+    }
+
     @ViewBuilder func noScrollEdgeEffect() -> some View {
         if #available(iOS 26, *) { scrollEdgeEffectHidden() } else { self }
+    }
+}
+
+// Covers the status bar and top bar plus a little below, solid at the top and clear at the bottom.
+struct TopFade: View {
+    var body: some View {
+        GeometryReader { g in
+            ZStack {
+                Rectangle().fill(.ultraThinMaterial)
+                Color(.systemBackground).opacity(0.7)
+            }
+            .mask(LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: 0.5),
+                                         .init(color: .clear, location: 1)], startPoint: .top, endPoint: .bottom))
+            .frame(height: g.safeAreaInsets.top + 24)
+            .ignoresSafeArea()
+        }
+        .allowsHitTesting(false)
     }
 }
 
