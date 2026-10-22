@@ -110,7 +110,10 @@ enum ImageSource {
     case remote(path: String)
 
     // whatsup overrides this (e.g. https://j4.crocfolder.com/uploads/); paths are resolved at load time.
-    nonisolated(unsafe) static var imagePath = "https://yesichat.com/uploads/"
+    // Remembered across launches, so paths resolve the same way before (or without) a server reply.
+    nonisolated(unsafe) static var imagePath = UserDefaults.standard.string(forKey: "imagePath") ?? "https://yesichat.com/uploads/" {
+        didSet { if imagePath != oldValue { UserDefaults.standard.set(imagePath, forKey: "imagePath") } }
+    }
 
     // uploadize(): paths are relative to imagePath unless already absolute (deob/app.deob.js:15586).
     // They can climb out of it ("../../yimv2.php?ja=…"), so resolve like a browser would.
@@ -118,21 +121,15 @@ enum ImageSource {
         URL(string: path, relativeTo: URL(string: imagePath))?.absoluteURL.standardized
     }
 
-    /// Photos we sent, by server message id, until the message comes back in the chat with its address:
-    /// private/upload only returns the id (its `thumb` is the sender's avatar), and the photo's address
-    /// is an encrypted `yimv2.php?ja=…` link that first appears in the message itself.
-    nonisolated(unsafe) static var sentAwaitingPath: [Int: Data] = [:]
+    /// Disk-cache keys for a chat photo, by message id (its address isn't stable: see DiskCache.imageFile).
+    static func fullKey(_ messageId: String) -> String { "msg:\(messageId):full" }
+    static func thumbKey(_ messageId: String) -> String { "msg:\(messageId):thumb" }
 
-    /// Files a photo we sent under its server addresses (the message path and the full-size path ChatImage
-    /// derives from it), so it shows offline without a download. y99 stores the upload as sent (minus
-    /// metadata), so our copy is the same picture.
-    static func cacheSent(_ data: Data, thumbPath: String) {
-        var full = thumbPath
-        if let r = thumbPath.range(of: "_thumb") { full.removeSubrange(r) }
-        for p in Set([thumbPath, full]) {
-            guard let u = url(for: p) else { continue }
-            Task.detached(priority: .utility) { DiskCache.write(data, to: DiskCache.imageFile(for: u)) }
-        }
+    /// Files a photo we just sent as that message's full-size image, so it shows offline without a download.
+    /// y99 stores the upload as sent (minus metadata), so our copy is the same picture.
+    static func cacheSent(_ data: Data, messageId: Int) {
+        let file = DiskCache.imageFile(key: fullKey(String(messageId)))
+        Task.detached(priority: .utility) { DiskCache.write(data, to: file) }
     }
 }
 
@@ -195,11 +192,13 @@ struct ChatImage: View {
             var full = path
             if let r = path.range(of: "_thumb") {
                 full.removeSubrange(r)
-                if image == nil, let thumb = await Self.fetch(path) { image = thumb }
+                // Skip the thumb when the full size is already on disk.
+                if image == nil, !DiskCache.has(ImageSource.fullKey(id)),
+                   let thumb = await Self.fetch(path, key: ImageSource.thumbKey(id)) { image = thumb }
             }
-            // Only the full-size image is cached: if this load is cancelled (row scrolled away)
-            // or fails, the next appearance tries again instead of keeping the blurry thumb.
-            if let big = await Self.fetch(full) {
+            // Only the full-size image goes in the memory cache: if this load is cancelled (row scrolled
+            // away) or fails, the next appearance tries again instead of keeping the blurry thumb.
+            if let big = await Self.fetch(full, key: ImageSource.fullKey(id)) {
                 image = big
                 Self.cache.setObject(big, forKey: id as NSString)
             }
@@ -207,11 +206,12 @@ struct ChatImage: View {
         failed = image == nil
     }
 
-    // Disk first (DiskCache, shared and size-capped), then the network; downloads are saved to disk.
-    private static func fetch(_ path: String) async -> UIImage? {
+    // Disk first (by message-id key), then the network; downloads are saved under that key.
+    private static func fetch(_ path: String, key: String) async -> UIImage? {
         guard let url = ImageSource.url(for: path) else { return nil }
-        let file = DiskCache.imageFile(for: url)
-        if let data = await Task.detached(operation: { DiskCache.read(file) }).value, let img = await decode(data) {
+        let file = DiskCache.imageFile(key: key)
+        if let data = await Task.detached(operation: { DiskCache.read(file) }).value,
+           let img = await decode(data) {
             return img
         }
         var req = URLRequest(url: url)

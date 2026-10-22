@@ -386,11 +386,6 @@ struct ChatView: View {
     func append(_ arr: [[String: Any]], persist: Bool = true) {
         if persist && seed.isEmpty { Store.current?.save(chat: friend, arr) }
         for o in arr {
-            // A photo we sent has come back with its address: cache our copy under it.
-            if (o["type"] as? String) == "image", let n = Int("\(o["id"] ?? "")"), let path = o["message"] as? String,
-               let data = ImageSource.sentAwaitingPath.removeValue(forKey: n) {
-                ImageSource.cacheSent(data, thumbPath: path)
-            }
             let id = String(describing: o["id"] ?? UUID().uuidString)
             guard !seen.contains(id) else { continue }
             guard let text = o["message"] as? String else { continue }
@@ -503,9 +498,9 @@ extension ChatView {
         ], auth: session.auth, username: session.username,
            file: .init(field: "picture", filename: img.filename, mime: img.mime, data: img.data))
         accepted(localId, r)
-        // Keep our copy until the message comes back with its address (see ImageSource.sentAwaitingPath).
+        // Cache our copy as that message's photo right away (private/upload answers with its msg_id).
         if let mid = (r as? [String: Any])?["msg_id"], let n = Int("\(mid)") {
-            ImageSource.sentAwaitingPath[n] = img.data
+            ImageSource.cacheSent(img.data, messageId: n)
         }
     }
 }

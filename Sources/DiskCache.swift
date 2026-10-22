@@ -11,8 +11,10 @@ enum DiskCache {
     static let attachments = root.appendingPathComponent("attachments")
     nonisolated(unsafe) private static var writes = 0
 
-    static func imageFile(for url: URL) -> URL {
-        let hash = Insecure.SHA1.hash(data: Data(url.absoluteString.utf8)).map { String(format: "%02x", $0) }.joined()
+    /// Any stable key, e.g. "msg:<message id>:full" (photo addresses change with the image server and
+    /// their encrypted links, so photos in chats are filed by message id).
+    static func imageFile(key: String) -> URL {
+        let hash = Insecure.SHA1.hash(data: Data(key.utf8)).map { String(format: "%02x", $0) }.joined()
         return images.appendingPathComponent(hash)
     }
 
@@ -28,6 +30,8 @@ enum DiskCache {
         didWrite()
     }
 
+    static func has(_ key: String) -> Bool { FileManager.default.fileExists(atPath: imageFile(key: key).path) }
+
     static func touch(_ file: URL) {
         try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: file.path)
     }
@@ -40,6 +44,11 @@ enum DiskCache {
 
     /// Deletes least-recently-used files until both folders together fit the limit.
     static func trim() {
+        // One-time: the first image cache was keyed by address, which broke offline; start it over.
+        if !UserDefaults.standard.bool(forKey: "imageCacheV2") {
+            try? FileManager.default.removeItem(at: images)
+            UserDefaults.standard.set(true, forKey: "imageCacheV2")
+        }
         let keys: [URLResourceKey] = [.contentModificationDateKey, .fileSizeKey, .isRegularFileKey]
         var files: [(url: URL, date: Date, size: Int64)] = []
         for dir in [images, attachments] {
