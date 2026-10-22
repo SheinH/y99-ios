@@ -59,8 +59,13 @@ struct ChatView: View {
     // in at the far end, and the keyboard or emoji panel shrinking the view leaves the newest in place.
     var chat: some View {
             ScrollView {
+                // The stack spans the scroll view edge to edge and the margins live inside it (on each row,
+                // plus the clear strips at both ends). Padding around the stack made the thread shake: when
+                // SwiftUI scrolls (a send, a new message, the typing bubble, a reconnect) it lines the stack
+                // itself up with the screen's corner, which scrolled sideways by the padding (16 pt, 8 pt).
                 LazyVStack(spacing: 0) {
-                    if partnerTyping { TypingBubble().padding(.top, 10).flipped().transition(.opacity) }
+                    Color.clear.frame(height: 8)
+                    if partnerTyping { TypingBubble().padding(.top, 10).padding(.horizontal, 16).flipped().transition(.opacity) }
                     let lastMine = messages.lastIndex(where: \.mine)
                     // Identify rows by message id, not position: history inserts shift positions, which
                     // would hand a row (and its in-flight image load) to a different message.
@@ -71,6 +76,7 @@ struct ChatView: View {
                         bubble(m, tail: endsRun, showStatus: i == lastMine)
                             .shiftProbe("row \(m.id) \(m.video != nil ? "video" : m.image != nil ? "image" : String(m.text.prefix(20)))")
                             .padding(.top, startsRun ? 10 : 2)
+                            .padding(.horizontal, 16)
                             .flipped()
                     }
                     // Reaching the far end (oldest loaded) pages in older history.
@@ -79,11 +85,10 @@ struct ChatView: View {
                     }
                     .frame(maxWidth: .infinity)
                     .onAppear { Task { await loadOlder() } }
+                    Color.clear.frame(height: 8)
                 }
                 .scrollTargetLayout()
                 .shiftProbe("stack")
-                .padding(.horizontal, 16)
-                .padding(.vertical, 8)
             }
             .scrollPosition($position)
             .onScrollGeometryChange(for: Bool.self) { g in g.contentOffset.y + g.contentInsets.top < 80 } action: { _, near in
