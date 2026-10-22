@@ -372,7 +372,8 @@ struct ChatView: View {
     // Like the web, tell the sender we've read their newest message while this chat is on screen.
     func markSeenIfVisible() {
         guard UIApplication.shared.applicationState == .active,
-              let newest = messages.filter({ !$0.mine }).compactMap(\.serverId).max(), newest > markedSeen else { return }
+              let newest = messages.filter({ !$0.mine }).compactMap(\.serverId).max() else { return }
+        guard newest > markedSeen else { DebugLog.log("seen \(friend) \(newest) skipped: already marked \(markedSeen)"); return }
         // Only counts as sent if the socket was up; otherwise .y99SocketReady brings us back here.
         if SocketManager.shared.markSeen(target: friend, msgId: newest) { markedSeen = newest }
     }

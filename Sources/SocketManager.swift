@@ -16,6 +16,12 @@ final class SocketManager: NSObject {
     private var running = false
     private var retryDelay: TimeInterval = 1
     private(set) var isConnected = false   // whatsup reports this as `ws`
+    // y99 sends {"cmd":"ping"} every few seconds. Like the web (deob ~20441 "No ping 15s. Disconnect"), a
+    // connection that goes 15 s without one is treated as silently dead and replaced: on a phone, sockets
+    // die without any error (network switch, weak signal, app suspended), and sends then go nowhere.
+    private var lastPing = Date()
+    private var sawPing = false   // only watch for silence once this connection has actually pinged
+    private var watchdog: Timer?
 
     func start(auth: String) {
         guard !running else { return }   // one socket per account: a second one gets the other logged out
@@ -23,11 +29,27 @@ final class SocketManager: NSObject {
         running = true
         retryDelay = 1
         connect()
+        DispatchQueue.main.async {
+            self.watchdog?.invalidate()
+            self.watchdog = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.checkPing() }
+        }
+    }
+
+    private func checkPing() {
+        guard running, isConnected, sawPing, Date().timeIntervalSince(lastPing) > 15 else { return }
+        DebugLog.log("socket: no ping for 15 s, reconnecting")
+        isConnected = false
+        task?.cancel(with: .goingAway, reason: nil)
+        task = nil
+        retryDelay = 1
+        connect()
     }
 
     func stop() {
+        DebugLog.log("socket stop")
         running = false
         isConnected = false
+        DispatchQueue.main.async { self.watchdog?.invalidate(); self.watchdog = nil }
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
     }
@@ -36,13 +58,16 @@ final class SocketManager: NSObject {
     /// Returns false when there's no live connection to send it on (the caller retries on .y99SocketReady).
     @discardableResult
     func markSeen(target: String, msgId: Int) -> Bool {
-        guard isConnected else { return false }
+        guard isConnected else { DebugLog.log("seen \(target) \(msgId) NOT sent: socket down"); return false }
+        DebugLog.log("socket -> message_seen \(target) \(msgId)")
         send(["cmd": "message_seen", "target": target, "msg_id": msgId])
         return true
     }
 
     private func connect() {
         guard running, let url = URL(string: "wss://api1.y99.in:8443") else { return }
+        DebugLog.log("socket connecting")
+        sawPing = false
         let session = URLSession(configuration: .default)
         let t = session.webSocketTask(with: url)
         task = t
@@ -52,12 +77,14 @@ final class SocketManager: NSObject {
 
     private func send(_ obj: [String: Any]) {
         guard let d = try? JSONSerialization.data(withJSONObject: obj) else { return }
-        task?.send(.data(d)) { _ in }
+        task?.send(.data(d)) { err in if let err { DebugLog.log("socket send error: \(err.localizedDescription)") } }
     }
 
     private func receive() {
-        task?.receive { [weak self] result in
-            guard let self else { return }
+        let current = task
+        current?.receive { [weak self] result in
+            // A replaced connection's callbacks (failure from being cancelled) must not touch the new one.
+            guard let self, current === self.task else { return }
             switch result {
             case .success(let message):
                 var data: Data?
@@ -67,7 +94,8 @@ final class SocketManager: NSObject {
                     self.handle(obj)
                 }
                 self.receive()
-            case .failure:
+            case .failure(let err):
+                DebugLog.log("socket failed: \(err.localizedDescription)")
                 self.isConnected = false
                 guard self.running else { return }
                 // Back off instead of hammering the server every second.
@@ -79,10 +107,20 @@ final class SocketManager: NSObject {
     }
 
     private func handle(_ o: [String: Any]) {
+        let cmd = o["cmd"] as? String ?? "?"
+        if cmd == "ping" {
+            if !sawPing { DebugLog.log("socket: pings arriving") }
+            lastPing = Date(); sawPing = true
+            return
+        }
+        let sub = (o["dispatch"] ?? o["commit"]).map { " \($0)" } ?? ""
+        let params = o["params"].map { " \($0)" } ?? ""
+        DebugLog.log("socket <- \(cmd)\(sub)\(params)\(cmd == "message" ? " from \(o["hunter"] ?? "?") id \(o["id"] ?? "?")" : "")")
         switch o["cmd"] as? String {
         case "welcome":
             send(["cmd": "authenticate", "auth_token": auth ?? "", "clientV": 4049])
         case "auth_success":
+            lastPing = Date()
             isConnected = true
             retryDelay = 1
             DispatchQueue.main.async { NotificationCenter.default.post(name: .y99SocketReady, object: nil) }
