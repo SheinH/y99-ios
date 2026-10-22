@@ -96,10 +96,22 @@ enum Attachments {
     // Downloads are cached on disk by id; concurrent requests for one id share a single download.
     @MainActor private static var inFlight: [String: Task<URL?, Never>] = [:]
 
+    /// Where an attachment's file lives in the cache.
+    static func cacheFile(for id: String) -> URL {
+        DiskCache.attachments.appendingPathComponent(id.replacingOccurrences(of: "/", with: "_"))
+    }
+
+    /// Files a video we just sent under its attachment id, so it plays offline without a download.
+    static func cacheSent(_ file: URL, as id: String) {
+        let dest = cacheFile(for: id)
+        try? FileManager.default.createDirectory(at: DiskCache.attachments, withIntermediateDirectories: true)
+        try? FileManager.default.removeItem(at: dest)
+        if (try? FileManager.default.copyItem(at: file, to: dest)) != nil { DiskCache.didWrite() }
+    }
+
     @MainActor static func download(_ id: String) async -> URL? {
         let dir = DiskCache.attachments   // shares the 500 MB limit with images
-        let safe = id.replacingOccurrences(of: "/", with: "_")
-        let dest = dir.appendingPathComponent(safe)
+        let dest = cacheFile(for: id)
         if FileManager.default.fileExists(atPath: dest.path) { DiskCache.touch(dest); return dest }
         if let t = inFlight[id] { return await t.value }
         let t = Task<URL?, Never> {

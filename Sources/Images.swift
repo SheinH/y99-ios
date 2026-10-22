@@ -117,6 +117,18 @@ enum ImageSource {
     static func url(for path: String) -> URL? {
         URL(string: path, relativeTo: URL(string: imagePath))?.absoluteURL.standardized
     }
+
+    /// Files a photo we just sent under the server's addresses for it (the thumb path private/upload
+    /// returns, and the full-size path ChatImage derives from it), so it shows offline without a download.
+    /// y99 stores the upload as sent (minus metadata), so our copy is the same picture.
+    static func cacheSent(_ data: Data, thumbPath: String) {
+        var full = thumbPath
+        if let r = thumbPath.range(of: "_thumb") { full.removeSubrange(r) }
+        for p in Set([thumbPath, full]) {
+            guard let u = url(for: p) else { continue }
+            Task.detached(priority: .utility) { DiskCache.write(data, to: DiskCache.imageFile(for: u)) }
+        }
+    }
 }
 
 // Rounded image for the thread; animates GIFs. Remote images show the server thumbnail first,

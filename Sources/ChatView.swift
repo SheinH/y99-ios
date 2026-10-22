@@ -471,6 +471,7 @@ extension ChatView {
             accepted(localId, nil)
             return
         }
+        Attachments.cacheSent(up.file, as: aid)   // plays offline later without downloading it back
         let text = "[ATTACHMENT]"
         let r = await API.post("private/send", ordered: [("message", text), ("target", friend), ("auth", session.auth ?? "")]
                                + SendTelemetry.fields(message: text, typingSeconds: 0)
@@ -497,6 +498,10 @@ extension ChatView {
         ], auth: session.auth, username: session.username,
            file: .init(field: "picture", filename: img.filename, mime: img.mime, data: img.data))
         accepted(localId, r)
+        // private/upload answers {delivery, msg_id, thumb}: keep our copy under that address for offline use.
+        if let thumb = (r as? [String: Any])?["thumb"] as? String, !thumb.isEmpty {
+            ImageSource.cacheSent(img.data, thumbPath: thumb)
+        }
     }
 }
 
