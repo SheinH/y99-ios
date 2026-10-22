@@ -284,7 +284,7 @@ struct FlowLayout: Layout {
         for row in rows(subviews, maxWidth: bounds.width) {
             var x = bounds.minX
             for i in row.items {
-                let s = subviews[i].sizeThatFits(.unspecified)
+                let s = size(subviews[i], maxWidth: bounds.width)
                 subviews[i].place(at: CGPoint(x: x, y: y + (row.height - s.height) / 2), proposal: ProposedViewSize(s))
                 x += s.width
             }
@@ -292,12 +292,20 @@ struct FlowLayout: Layout {
         }
     }
 
+    /// Natural size, except a word longer than the line (a link) wraps inside it: a bubble wider than
+    /// the screen pushed the whole thread sideways and made it shake on every redraw.
+    private func size(_ v: LayoutSubview, maxWidth: CGFloat) -> CGSize {
+        let s = v.sizeThatFits(.unspecified)
+        guard s.width > maxWidth, maxWidth.isFinite else { return s }
+        return v.sizeThatFits(ProposedViewSize(width: maxWidth, height: nil))
+    }
+
     private struct Row { var items: [Int] = []; var width: CGFloat = 0; var height: CGFloat = 0 }
 
     private func rows(_ subviews: Subviews, maxWidth: CGFloat) -> [Row] {
         var rows = [Row()]
         for i in subviews.indices {
-            let s = subviews[i].sizeThatFits(.unspecified)
+            let s = size(subviews[i], maxWidth: maxWidth)
             if rows[rows.count - 1].width + s.width > maxWidth && !rows[rows.count - 1].items.isEmpty { rows.append(Row()) }
             rows[rows.count - 1].items.append(i)
             rows[rows.count - 1].width += s.width

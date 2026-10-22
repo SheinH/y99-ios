@@ -129,6 +129,14 @@ struct ChatView: View {
             if ProcessInfo.processInfo.arguments.contains("-focusLater") {
                 Task { try? await Task.sleep(for: .seconds(2)); typing = true }
             }
+            if ProcessInfo.processInfo.arguments.contains("-fakeTyping") {
+                // Partner typing at 2s, then "my" keystrokes every 0.4s.
+                Task {
+                    try? await Task.sleep(for: .seconds(2)); setPartnerTyping(true)
+                    try? await Task.sleep(for: .seconds(3))
+                    for c in "hello there friend" { try? await Task.sleep(for: .seconds(0.4)); draft.append(c) }
+                }
+            }
             if ProcessInfo.processInfo.arguments.contains("-showEmojiPanel") {
                 Task { try? await Task.sleep(for: .seconds(2)); showingEmoji = true; typing = true }
             }
@@ -138,6 +146,7 @@ struct ChatView: View {
                 #if DEBUG
                 if ProcessInfo.processInfo.arguments.contains("-longSeed") {
                     messages = (1...40).map { Msg(id: "\($0)", text: "filler message \($0) :bg_hype:", mine: $0 % 3 == 0, serverId: $0) }
+                        + [Msg(id: "41", text: "look https://example.com/averyveryverylongpathwithoutanyspacesatall/more/stuff/here?x=12345 :bg_hype:", mine: false, serverId: 41)]
                 }
                 #endif
                 return
