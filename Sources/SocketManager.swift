@@ -3,7 +3,11 @@ import Foundation
 // WebSocket (deob/modules/WI9n.js): binary frames of UTF-8 JSON.
 // welcome -> authenticate -> auth_success. Incoming DMs arrive as cmd:"message".
 // The server can also run client actions remotely via cmd:"dispatch"/"commit" {dispatch|commit, params}.
-extension Notification.Name { static let y99Message = Notification.Name("y99Message") }
+extension Notification.Name {
+    static let y99Message = Notification.Name("y99Message")
+    /// The socket is (re)authenticated: anything that needs it (read receipts) can go now.
+    static let y99SocketReady = Notification.Name("y99SocketReady")
+}
 
 final class SocketManager: NSObject {
     static let shared = SocketManager()
@@ -29,8 +33,12 @@ final class SocketManager: NSObject {
     }
 
     /// Tells the sender we've read up to msg_id (what the web sends when a chat is open and focused).
-    func markSeen(target: String, msgId: Int) {
+    /// Returns false when there's no live connection to send it on (the caller retries on .y99SocketReady).
+    @discardableResult
+    func markSeen(target: String, msgId: Int) -> Bool {
+        guard isConnected else { return false }
         send(["cmd": "message_seen", "target": target, "msg_id": msgId])
+        return true
     }
 
     private func connect() {
@@ -77,6 +85,7 @@ final class SocketManager: NSObject {
         case "auth_success":
             isConnected = true
             retryDelay = 1
+            DispatchQueue.main.async { NotificationCenter.default.post(name: .y99SocketReady, object: nil) }
         case "message":
             NotificationCenter.default.post(name: .y99Message, object: nil, userInfo: o)
         case "dispatch":

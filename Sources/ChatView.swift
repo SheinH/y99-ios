@@ -182,6 +182,7 @@ struct ChatView: View {
             lastEdit = draft.isEmpty ? nil : now
         }
         .onChange(of: [readId, deliveredId, markedSeen]) { saveState() }
+        .onReceive(NotificationCenter.default.publisher(for: .y99SocketReady)) { _ in markSeenIfVisible() }
         .onReceive(NotificationCenter.default.publisher(for: .y99Outbox)) { note in
             if let info = note.userInfo { outboxChanged(info) }
         }
@@ -365,8 +366,8 @@ struct ChatView: View {
     func markSeenIfVisible() {
         guard UIApplication.shared.applicationState == .active,
               let newest = messages.filter({ !$0.mine }).compactMap(\.serverId).max(), newest > markedSeen else { return }
-        markedSeen = newest
-        SocketManager.shared.markSeen(target: friend, msgId: newest)
+        // Only counts as sent if the socket was up; otherwise .y99SocketReady brings us back here.
+        if SocketManager.shared.markSeen(target: friend, msgId: newest) { markedSeen = newest }
     }
 
     // private/fetch {target, private_last, pageUp, mode:"private"} -> {private: [...]} with the 20 messages
