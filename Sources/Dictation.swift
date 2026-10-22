@@ -143,6 +143,11 @@ enum Keychain {
         close()
     }
 
+    #if DEBUG
+    /// Harness: the microphone and the listening look without the transcription service.
+    func debugListen() { try? startAudio(); state = .listening }
+    #endif
+
     // MARK: Audio
 
     private func startAudio() throws {

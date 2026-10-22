@@ -52,7 +52,11 @@ struct ComposerTextView: UIViewRepresentable {
 
     // Grow with the text up to five lines, then scroll.
     func sizeThatFits(_ proposal: ProposedViewSize, uiView v: UITextView, context: Context) -> CGSize? {
-        guard let width = proposal.width, width > 0 else { return nil }
+        // Always a real answer. SwiftUI also asks with width 0 (smallest) and infinity (ideal): nil fell back
+        // to UIKit's intrinsic size, which depends on the text view's state, and infinity came back as an
+        // infinitely wide field; either can throw the composer's layout (and the thread) sideways.
+        let proposed = proposal.width.flatMap { $0.isFinite && $0 > 0 ? $0 : nil }
+        let width = proposed ?? (v.bounds.width > 0 ? v.bounds.width : 200)
         // Measured from the text itself: the text view's own sizeThatFits answers differently once
         // scrolling is on, which flipped scrolling off and on (and the view back to the top) as it filled.
         let inset = v.textContainerInset, pad = v.textContainer.lineFragmentPadding * 2
@@ -71,7 +75,9 @@ struct ComposerTextView: UIViewRepresentable {
         if realWidth, v.isScrollEnabled != scrolls {
             DispatchQueue.main.async { v.isScrollEnabled = scrolls; if scrolls { Self.showEnd(v) } }
         }
-        return CGSize(width: width, height: min(full, cap))
+        // Width: what was offered (0 included, so the field stays able to shrink), or its own for "ideal".
+        let reported = proposal.width.flatMap { $0.isFinite ? $0 : nil } ?? width
+        return CGSize(width: reported, height: min(full, cap))
     }
 
     /// Swaps only what changed after the common start: setting `text` wholesale jumps a scrolling text

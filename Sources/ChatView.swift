@@ -562,9 +562,10 @@ struct ChatView: View {
                         VideoPlayback.present(URL(fileURLWithPath: args[i + 1]))
                         try? await Task.sleep(for: .seconds(3))
                         let root = UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }.first?.rootViewController
-                        root?.dismiss(animated: true)
+                        root?.presentedViewController?.dismiss(animated: true)
                         try? await Task.sleep(for: .seconds(1.5))
                     }
+                    if args.contains("-realMic") { dictation.debugListen() }
                     let words = "so I was thinking that we could maybe go out to get some food later tonight if you are not too tired from work and then we can watch a movie or something and honestly I would really love that because it has been such a long week and I miss you a lot so please let me know what you think about all of this okay".split(separator: " ")
                     var done = ""
                     for w in words {

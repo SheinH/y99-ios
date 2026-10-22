@@ -297,10 +297,44 @@ enum VideoPlayback {
                 vc = WebVideoController(file: url)
             }
             vc.modalPresentationStyle = .fullScreen
-            guard var top = UIApplication.shared.connectedScenes
-                .compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first?.rootViewController else { return }
-            while let next = top.presentedViewController { top = next }
-            top.present(vc, animated: true) { (vc as? AVPlayerViewController)?.player?.play() }
+            PlayerWindow.present(vc) { (vc as? AVPlayerViewController)?.player?.play() }
+        }
+    }
+}
+
+/// Shows the player in a window of its own above the app, removed once the player closes. Presented
+/// over the app's own root instead, closing it (the player's swipe-down especially) left the chat
+/// screen's layout off, so the thread jumped sideways on later layout changes.
+@MainActor enum PlayerWindow {
+    private static var window: UIWindow?
+
+    static func present(_ vc: UIViewController, completion: @escaping () -> Void) {
+        guard window == nil, let scene = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene }).first(where: { $0.activationState == .foregroundActive })
+            ?? UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first else { return }
+        let appWindow = scene.keyWindow
+        let host = Host()
+        let w = UIWindow(windowScene: scene)
+        w.windowLevel = .normal + 1
+        w.backgroundColor = .clear
+        w.rootViewController = host
+        host.onPlayerClosed = {
+            w.isHidden = true
+            window = nil
+            appWindow?.makeKey()
+        }
+        window = w
+        w.makeKeyAndVisible()
+        host.present(vc, animated: true) { host.showing = true; completion() }
+    }
+
+    private final class Host: UIViewController {
+        var showing = false
+        var onPlayerClosed: (() -> Void)?
+        override func viewDidLoad() { super.viewDidLoad(); view.backgroundColor = .clear }
+        override func viewDidAppear(_ animated: Bool) {
+            super.viewDidAppear(animated)
+            if showing && presentedViewController == nil { onPlayerClosed?(); onPlayerClosed = nil }
         }
     }
 }
