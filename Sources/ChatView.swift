@@ -42,8 +42,17 @@ struct ChatView: View {
     // inserted above it or change height (older pages, images finishing loading).
     @State private var position = ScrollPosition(idType: String.self)
     @State private var pinnedToBottom = true   // only the user's own scrolling changes this
+    @State private var friendThumb: String?      // their avatar, from their newest message
+    @State private var friendThumbId = 0
+    @State private var avatarImage: UIImage?     // full size, once fetched
+    @State private var viewingAvatar = false
 
-    var body: some View { observers(chat) }
+    var body: some View {
+        observers(chat)
+            .fullScreenCover(isPresented: $viewingAvatar) {
+                if let avatarImage { ImageViewer(image: avatarImage) }
+            }
+    }
 
     var chat: some View {
         ScrollView {
@@ -118,6 +127,16 @@ struct ChatView: View {
             }
         .navigationTitle(friend)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                HStack(spacing: 8) {
+                    avatarButton
+                    Text(friend)
+                        .font(.headline)
+                        .lineLimit(1)
+                }
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .y99Message)) { note in
             guard let o = note.userInfo as? [String: Any],
                   (o["hunter"] as? String) == friend else { return }
@@ -212,6 +231,25 @@ struct ChatView: View {
                     deliveredId = max(deliveredId, mine)
                 }
             }
+    }
+
+    // Tap opens the full-size picture (fetched once per picture, then cached).
+    var avatarButton: some View {
+        Button {
+            guard let thumb = friendThumb else { return }
+            Task {
+                if avatarImage == nil {
+                    avatarImage = await Avatar.full(user: friend, thumb: thumb, auth: session.auth, me: session.username)
+                }
+                if avatarImage == nil { avatarImage = await Avatar.thumbImage(thumb) }
+                if avatarImage != nil { viewingAvatar = true }
+            }
+        } label: {
+            AvatarView(thumb: friendThumb, full: avatarImage)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(friend)'s profile picture")
+        .onChange(of: friendThumb) { avatarImage = nil }   // they changed it
     }
 
     var canSend: Bool { !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
@@ -448,6 +486,7 @@ struct ChatView: View {
                 if "\(o["seen"] ?? 0)" == "1" { readId = max(readId, n) }
                 if "\(o["delivered"] ?? 0)" == "1" { deliveredId = max(deliveredId, n) }
             } else if !isMine, let n = Int(id) {
+                if n > friendThumbId, let t = o["thumb"] as? String, !t.isEmpty { friendThumb = t; friendThumbId = n }
                 // Partner sent a message (or reply) with id `n`. Any message we sent prior to `n`
                 // has definitively been seen and delivered.
                 let priorMine = messages.filter(\.mine).compactMap(\.serverId).filter { $0 < n }.max()

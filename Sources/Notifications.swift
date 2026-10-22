@@ -13,9 +13,6 @@ import BackgroundTasks
     @Published var openChat: String?   // set when a notification is tapped; FriendsView pushes it
     var activeChat: String?            // chat on screen; its messages don't notify
 
-    // whatsup sends this (e.g. https://j4.crocfolder.com/uploads/avatar/); thumbs are relative to it.
-    nonisolated(unsafe) static var avatarPath = "https://yesichat.com/uploads/avatar/"
-
     func setUp() {
         UNUserNotificationCenter.current().delegate = self
         Task { _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) }
@@ -48,15 +45,12 @@ import BackgroundTasks
         try? await UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: id, content: content, trigger: nil))
     }
 
-    // Attachments must be local files with a real image extension.
+    // Attachments must be local files with a real image extension; the image comes from the shared avatar cache.
     private nonisolated static func avatarAttachment(_ thumb: String) async -> UNNotificationAttachment? {
-        guard let url = URL(string: thumb, relativeTo: URL(string: avatarPath))?.absoluteURL.standardized else { return nil }
-        var req = URLRequest(url: url)
-        req.setValue("https://meetyou.me/", forHTTPHeaderField: "Referer") // same host rule as images
-        guard let (data, resp) = try? await URLSession.shared.data(for: req),
-              (resp as? HTTPURLResponse)?.statusCode == 200 else { return nil }
-        let ext = url.pathExtension.isEmpty ? "jpg" : url.pathExtension
-        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension(ext)
+        guard let data = await Avatar.thumbData(thumb) else { return nil }
+        let ext = Avatar.url(thumb)?.pathExtension ?? ""
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension(ext.isEmpty ? "jpg" : ext)
         guard (try? data.write(to: file)) != nil else { return nil }
         return try? UNNotificationAttachment(identifier: "avatar", url: file)
     }

@@ -211,21 +211,11 @@ struct ChatImage: View {
     }
 
     // Disk first (by message-id key), then the network; downloads are saved under that key.
+    // A photo we just sent is on disk without an address until y99 echoes it, so the path may be empty.
     private static func fetch(_ path: String, key: String) async -> UIImage? {
-        // Disk before resolving the address: a photo we just sent is stored without one until y99 echoes it.
-        let file = DiskCache.imageFile(key: key)
-        if let data = await Task.detached(operation: { DiskCache.read(file) }).value,
-           let img = await decode(data) {
-            return img
-        }
-        guard !path.isEmpty, let url = ImageSource.url(for: path) else { return nil }
-        var req = URLRequest(url: url)
-        req.setValue("https://meetyou.me/", forHTTPHeaderField: "Referer") // 403 without it
-        guard let (data, resp) = try? await URLSession.shared.data(for: req),
-              (resp as? HTTPURLResponse)?.statusCode == 200 else { return nil }
-        let img = await decode(data)
-        if img != nil { Task.detached(priority: .utility) { DiskCache.write(data, to: file) } }
-        return img
+        let url = path.isEmpty ? nil : ImageSource.url(for: path)
+        guard let data = await DiskCache.image(key: key, url: url) else { return nil }
+        return await decode(data)
     }
 
     private static func decode(_ data: Data) async -> UIImage? {

@@ -109,7 +109,7 @@ enum API {
             Captcha.handle(json)
             if let dict = json as? [String: Any] {
                 if let p = dict["imagePath"] as? String { ImageSource.imagePath = p }
-                if let p = dict["avatarPath"] as? String { Notifier.avatarPath = p }
+                if let p = dict["avatarPath"] as? String { Avatar.path = p }
             }
             return .reply(json)
         } catch let e as URLError {

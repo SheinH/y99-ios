@@ -32,6 +32,20 @@ enum DiskCache {
 
     static func has(_ key: String) -> Bool { FileManager.default.fileExists(atPath: imageFile(key: key).path) }
 
+    /// The image filed under `key`, else downloaded from `url` (y99's image hosts 403 without the Referer)
+    /// and filed under it. `url` may be nil when only the cached copy can be used.
+    static func image(key: String, url: URL?) async -> Data? {
+        let file = imageFile(key: key)
+        if let data = await Task.detached(operation: { read(file) }).value { return data }
+        guard let url else { return nil }
+        var req = URLRequest(url: url)
+        req.setValue("https://meetyou.me/", forHTTPHeaderField: "Referer")
+        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+              (resp as? HTTPURLResponse)?.statusCode == 200, !data.isEmpty else { return nil }
+        Task.detached(priority: .utility) { write(data, to: file) }
+        return data
+    }
+
     static func touch(_ file: URL) {
         try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: file.path)
     }
