@@ -1,5 +1,6 @@
 import SwiftUI
 import PhotosUI
+import UniformTypeIdentifiers
 
 struct Msg: Identifiable {
     let id: String
@@ -27,6 +28,7 @@ struct ChatView: View {
     @State private var readId = 0        // whatsup last_seen[1]: partner has seen everything <= this
     @State private var markedSeen = 0   // newest of their messages we've told the server we read
     @State private var photo: PhotosPickerItem?
+    @State private var pickingFile = false
     @ObservedObject private var connectivity = Connectivity.shared
     @State private var typingMs: Double = 0      // web's lkSpent: time between edits, gaps under 5s only
     @State private var lastEdit: Date?
@@ -260,6 +262,8 @@ struct ChatView: View {
                 Button { takingPhoto = true } label: { Label("Camera", systemImage: "camera") }
                     .disabled(!UIImagePickerController.isSourceTypeAvailable(.camera))
                 Button { pickingPhoto = true } label: { Label("Photos & Videos", systemImage: "photo.on.rectangle") }
+                // Downloads (Safari, other apps) land in Files, not the photo library.
+                Button { pickingFile = true } label: { Label("Files", systemImage: "folder") }
             } label: {
                 Image(systemName: "plus")
                     .font(.system(size: 17, weight: .medium))
@@ -270,6 +274,10 @@ struct ChatView: View {
             // .current keeps the original bytes (e.g. HEIC) so ImagePrep does the conversion, not Photos.
             .photosPicker(isPresented: $pickingPhoto, selection: $photo, matching: .any(of: [.images, .videos]),
                           preferredItemEncoding: .current)
+            .fileImporter(isPresented: $pickingFile, allowedContentTypes: [.movie, .image]) { result in
+                guard case .success(let url) = result else { return }
+                Task { await sendFile(url) }
+            }
             .fullScreenCover(isPresented: $takingPhoto) {
                 CameraPicker { shot in Task { await sendCameraPhoto(shot) } }
                     .ignoresSafeArea()
@@ -578,6 +586,20 @@ extension ChatView {
             return
         }
         messages.append(Msg(id: e.id, text: "", mine: true, video: e.fileURL.map { .local($0) }, pending: e.state))
+    }
+
+    // From Files: copy it out first (it's only lent to us, and video prep moves/deletes what it's given).
+    func sendFile(_ url: URL) async {
+        let lent = url.startAccessingSecurityScopedResource()
+        defer { if lent { url.stopAccessingSecurityScopedResource() } }
+        if UTType(filenameExtension: url.pathExtension.lowercased())?.conforms(to: .image) == true {
+            if let data = try? Data(contentsOf: url) { await sendImage(data) }
+            return
+        }
+        let copy = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension(url.pathExtension.isEmpty ? "mov" : url.pathExtension)
+        guard (try? FileManager.default.copyItem(at: url, to: copy)) != nil else { return }
+        await sendVideo(copy)
     }
 
     // Camera: save the shot to the library, then send it straight away.
