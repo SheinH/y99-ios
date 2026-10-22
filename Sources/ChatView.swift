@@ -108,7 +108,7 @@ struct ChatView: View {
                         .font(.headline)
                         .lineLimit(1)
                 }
-                .padding(.leading, 4).padding(.trailing, 14).padding(.vertical, 4)
+                .padding(.horizontal, 10).padding(.vertical, 4)   // wide enough that the square avatar clears the curve
                 .glass(in: Capsule())
             }
         }
