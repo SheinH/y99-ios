@@ -41,8 +41,8 @@ enum API {
 
     /// Fields go out in exactly this order (the web's FormData order), then `r`. Include `auth` where the
     /// web puts it, e.g. private/send is message, target, auth, then the telemetry fields.
-    static func post(_ path: String, ordered fields: [(String, String)], username: String,
-                     file: File? = nil) async -> Any? {
+    static func request(_ path: String, ordered fields: [(String, String)], username: String,
+                        file: File? = nil) -> URLRequest {
         let body = fields + [("r", Saira.encrypt(value: username))]
         let boundary = webKitBoundary()
         var data = Data()
@@ -69,14 +69,51 @@ enum API {
         req.setValue("application/json, text/plain, */*", forHTTPHeaderField: "Accept")   // axios default
         req.setValue("https://meetyou.me/", forHTTPHeaderField: "Referer")
         req.httpBody = data
-
-        guard let (respData, _) = try? await URLSession.shared.data(for: req) else { return nil }
-        let json = try? JSONSerialization.jsonObject(with: respData, options: .allowFragments)
-        Captcha.handle(json)
-        if let dict = json as? [String: Any] {
-            if let p = dict["imagePath"] as? String { ImageSource.imagePath = p }
-            if let p = dict["avatarPath"] as? String { Notifier.avatarPath = p }
-        }
-        return json
+        return req
     }
+
+    static func post(_ path: String, ordered fields: [(String, String)], username: String,
+                     file: File? = nil) async -> Any? {
+        if case .reply(let json) = await send(request(path, ordered: fields, username: username, file: file)) { return json }
+        return nil
+    }
+
+    /// How a request ended, for callers that must not send twice (the outbox).
+    enum Outcome {
+        case reply(Any?)   // the server answered (parsed JSON, or nil for a non-JSON body like "ok")
+        case notSent       // failed before reaching the server (offline, DNS, connect): safe to resend
+        case unknown       // failed after it may have reached the server (timeout, dropped connection)
+    }
+
+    /// Like post(ordered:), but says whether a failed request could have reached the server.
+    static func postOutcome(_ path: String, ordered fields: [(String, String)], username: String,
+                            file: File? = nil, timeout: TimeInterval = 15) async -> Outcome {
+        var req = request(path, ordered: fields, username: username, file: file)
+        req.timeoutInterval = timeout
+        return await send(req)
+    }
+
+    static func send(_ req: URLRequest) async -> Outcome {
+        do {
+            let (respData, _) = try await URLSession.shared.data(for: req)
+            let json = try? JSONSerialization.jsonObject(with: respData, options: .allowFragments)
+            Captcha.handle(json)
+            if let dict = json as? [String: Any] {
+                if let p = dict["imagePath"] as? String { ImageSource.imagePath = p }
+                if let p = dict["avatarPath"] as? String { Notifier.avatarPath = p }
+            }
+            return .reply(json)
+        } catch let e as URLError {
+            return neverSent.contains(e.code) ? .notSent : .unknown
+        } catch {
+            return .unknown
+        }
+    }
+
+    /// URLError codes that mean the request never got to the server.
+    static let neverSent: Set<URLError.Code> = [
+        .notConnectedToInternet, .cannotFindHost, .cannotConnectToHost, .dnsLookupFailed,
+        .dataNotAllowed, .internationalRoamingOff, .callIsActive, .secureConnectionFailed,
+        .serverCertificateUntrusted, .appTransportSecurityRequiresSecureConnection,
+    ]
 }

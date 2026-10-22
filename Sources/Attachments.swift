@@ -86,6 +86,7 @@ enum Attachments {
 
         var req = URLRequest(url: endpoint)
         req.httpMethod = "POST"
+        req.timeoutInterval = 300   // big videos on a slow connection
         req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         browserHeaders(&req)
         guard let (data, _) = try? await URLSession.shared.upload(for: req, fromFile: body),

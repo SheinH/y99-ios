@@ -8,6 +8,7 @@ struct Msg: Identifiable {
     var image: ImageSource? = nil
     var video: VideoSource? = nil
     var failed = false
+    var pending: OutboxEntry.State? = nil   // still in the outbox
     var serverId: Int?   // set once the server accepts it; nil while sending
 }
 
@@ -26,6 +27,7 @@ struct ChatView: View {
     @State private var readId = 0        // whatsup last_seen[1]: partner has seen everything <= this
     @State private var markedSeen = 0   // newest of their messages we've told the server we read
     @State private var photo: PhotosPickerItem?
+    @ObservedObject private var connectivity = Connectivity.shared
     @State private var typingMs: Double = 0      // web's lkSpent: time between edits, gaps under 5s only
     @State private var lastEdit: Date?
     @State private var pickingPhoto = false
@@ -159,6 +161,7 @@ struct ChatView: View {
                 if draft.isEmpty { draft = st.draft }
                 append(store.messages(chat: friend, limit: 100), persist: false)
             }
+            showOutbox()
             Whatsup.shared.chat = .init(target: friend, privateLast: lastId) { dict in handle(dict) }
             Task { await refreshLatest() }
             Whatsup.shared.pollNow()
@@ -175,6 +178,9 @@ struct ChatView: View {
             lastEdit = draft.isEmpty ? nil : now
         }
         .onChange(of: [readId, deliveredId, markedSeen]) { saveState() }
+        .onReceive(NotificationCenter.default.publisher(for: .y99Outbox)) { note in
+            if let info = note.userInfo { outboxChanged(info) }
+        }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
             guard seed.isEmpty else { return }
             Task { await refreshLatest() }
@@ -285,7 +291,11 @@ struct ChatView: View {
                 }
                 if !m.mine { Spacer(minLength: 60) }
             }
-            if m.failed {
+            if m.pending == .failed {
+                Button { Outbox.shared.retry(m.id) } label: {
+                    Text("Not Delivered · Tap to retry").font(.caption).foregroundStyle(.red)
+                }
+            } else if m.failed {
                 Text("Not Delivered").font(.caption).foregroundStyle(.red)
             } else if showStatus {
                 Text(status(m)).font(.caption).foregroundStyle(.secondary)
@@ -296,6 +306,12 @@ struct ChatView: View {
     // Same rule as the web's updateMessagesDelivery/updateMessagesSeen (deob/modules/XBnl.js):
     // a message is delivered/seen once its id <= the partner's last delivered/seen id.
     func status(_ m: Msg) -> String {
+        switch m.pending {
+        case .waiting?: return connectivity.isOnline ? "Sending…" : "Waiting for connection"
+        case .sending?: return "Sending…"
+        case .unconfirmed?: return connectivity.isOnline ? "Checking…" : "Waiting for connection"
+        default: break
+        }
         guard let id = m.serverId else { return "Sending…" }
         if id <= readId { return "Read" }
         if id <= deliveredId { return "Delivered" }
@@ -445,47 +461,44 @@ struct ChatView: View {
         markSeenIfVisible()
     }
 
-    // private/send {target, message} -> {delivery:"delivered", msg_id} (deob ~8250)
+    // Every send goes through the outbox (Outbox.swift): stored first, then sent in order, retried
+    // when the connection returns, and never sent twice. The bubble shows at once from the local copy.
     func send() {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         draft = ""
         let seconds = typingMs / 1000
         typingMs = 0; lastEdit = nil
-        let localId = "local-\(UUID().uuidString)"
-        messages.append(Msg(id: localId, text: text, mine: true))
-        Task {
-            let r = await API.post("private/send", ordered: [("message", text), ("target", friend), ("auth", session.auth ?? "")]
-                                   + SendTelemetry.fields(message: text, typingSeconds: seconds),
-                                   username: session.username)
-            accepted(localId, r, stub: ["message": text])
+        let e = Outbox.shared.addText(chat: friend, text: text, typingSeconds: seconds)
+        messages.append(Msg(id: e.id, text: text, mine: true, pending: e.state))
+    }
+
+    /// Outbox progress for a bubble in this chat; once sent it becomes a normal message with its server id.
+    func outboxChanged(_ info: [AnyHashable: Any]) {
+        guard info["chat"] as? String == friend, let id = info["id"] as? String,
+              let i = messages.firstIndex(where: { $0.id == id }) else { return }
+        if let n = info["serverId"] as? Int {
+            seen.insert(String(n))   // don't add it again when y99 echoes it back
+            messages[i].serverId = n
+            messages[i].pending = nil
+            if n > lastId { lastId = n }
+        } else if let raw = info["state"] as? String {
+            messages[i].pending = OutboxEntry.State(rawValue: raw)
         }
     }
 
-    // Record the server's msg_id on the local message (so status can track it), or mark it failed.
-    /// `stub` holds the message fields we know (text, or type/attachment): with the server's msg_id it's
-    /// stored right away, so the message is in the cache even if we go offline before y99 echoes it back
-    /// (the echo or the next refresh replaces it with y99's own copy).
-    func accepted(_ localId: String, _ r: Any?, stub: [String: Any] = [:]) {
-        guard let i = messages.firstIndex(where: { $0.id == localId }) else { return }
-        if let dict = r as? [String: Any], dict["delivery"] as? String == "delivered",
-           let mid = dict["msg_id"], let n = Int("\(mid)") {
-            seen.insert(String(n)) // avoid re-adding when it echoes back
-            messages[i].serverId = n
-            if seed.isEmpty {
-                let obj = stub.merging(["id": n, "hunter": session.username, "target": friend,
-                                        "date": Int(Date().timeIntervalSince1970), "delivered": 0, "seen": 0]) { _, new in new }
-                Store.current?.save(chat: friend, [obj])
-            }
-        } else {
-            messages[i].failed = true
+    /// Unsent messages for this chat (also after a relaunch), shown after the history.
+    func showOutbox() {
+        for e in Outbox.shared.entries(chat: friend) where !messages.contains(where: { $0.id == e.id }) {
+            var m = Msg(id: e.id, text: e.text ?? "", mine: true, pending: e.state)
+            if e.kind == .photo, let url = e.fileURL, let data = try? Data(contentsOf: url) { m.image = .local(data) }
+            if e.kind == .video, let url = e.fileURL { m.video = .local(url) }
+            messages.append(m)
         }
     }
 }
 
 extension ChatView {
-    // private/upload {target, picture, mm: lastModified ms, ta: filename, x: savedKb}
-    //   -> {delivery: "delivered", msg_id, thumb} (deob/modules/CMHb.js upload)
     func sendImage(_ original: Data) async {
         guard let img = await Task.detached(operation: { ImagePrep.prepare(original) }).value else {
             messages.append(Msg(id: "local-\(UUID().uuidString)", text: "", mine: true, image: .local(original), failed: true))
@@ -494,26 +507,15 @@ extension ChatView {
         await upload(img)
     }
 
-    // Video: rewrap .mov as MP4 (others go as they are), upload to the storage server, then send "[ATTACHMENT]" pointing at it,
-    // the way the web's attach button does (deob ~38606): attachment=true, attachmentId=<id>.
+    // Video: rewrap .mov as MP4 (others go as they are) here, then the outbox uploads it to the storage
+    // server and sends "[ATTACHMENT]" pointing at it, the way the web's attach button does (deob ~38606).
     func sendVideo(_ picked: URL) async {
-        let localId = "local-\(UUID().uuidString)"
-        guard let up = await VideoPrep.forUpload(picked) else {
-            messages.append(Msg(id: localId, text: "", mine: true, video: .local(picked), failed: true))
+        guard let up = await VideoPrep.forUpload(picked),
+              let e = Outbox.shared.addVideo(chat: friend, file: up.file, filename: up.name, mime: up.mime) else {
+            messages.append(Msg(id: "local-\(UUID().uuidString)", text: "", mine: true, video: .local(picked), failed: true))
             return
         }
-        messages.append(Msg(id: localId, text: "", mine: true, video: .local(up.file)))
-        guard let aid = await Attachments.upload(file: up.file, filename: up.name, mime: up.mime) else {
-            accepted(localId, nil)
-            return
-        }
-        Attachments.cacheSent(up.file, as: aid)   // plays offline later without downloading it back
-        let text = "[ATTACHMENT]"
-        let r = await API.post("private/send", ordered: [("message", text), ("target", friend), ("auth", session.auth ?? "")]
-                               + SendTelemetry.fields(message: text, typingSeconds: 0)
-                               + [("attachment", "true"), ("attachmentId", aid)],
-                               username: session.username)
-        accepted(localId, r, stub: ["type": "attachment", "message": text, "attachmentId": aid])
+        messages.append(Msg(id: e.id, text: "", mine: true, video: e.fileURL.map { .local($0) }, pending: e.state))
     }
 
     // Camera: save the shot to the library, then send it straight away.
@@ -523,21 +525,13 @@ extension ChatView {
         await upload(img)
     }
 
+    // private/upload {target, picture, mm, ta: filename, x: savedKb} -> {delivery, msg_id} (deob/modules/CMHb.js)
     func upload(_ img: PreparedImage) async {
-        let localId = "local-\(UUID().uuidString)"
-        messages.append(Msg(id: localId, text: "", mine: true, image: .local(img.data)))
-        let r = await API.post("private/upload", [
-            "target": friend,
-            "mm": String(Int(Date().timeIntervalSince1970 * 1000)),
-            "ta": img.filename,
-            "x": String(img.savedKb),
-        ], auth: session.auth, username: session.username,
-           file: .init(field: "picture", filename: img.filename, mime: img.mime, data: img.data))
-        accepted(localId, r, stub: ["type": "image", "message": ""])
-        // Cache our copy as that message's photo right away (private/upload answers with its msg_id).
-        if let mid = (r as? [String: Any])?["msg_id"], let n = Int("\(mid)") {
-            ImageSource.cacheSent(img.data, messageId: n)
+        guard let e = Outbox.shared.addPhoto(chat: friend, image: img) else {
+            messages.append(Msg(id: "local-\(UUID().uuidString)", text: "", mine: true, image: .local(img.data), failed: true))
+            return
         }
+        messages.append(Msg(id: e.id, text: "", mine: true, image: .local(img.data), pending: e.state))
     }
 }
 

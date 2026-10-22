@@ -10,6 +10,7 @@ import SQLite3
     static func open(username: String) {
         guard current?.username != username else { return }
         current = username.isEmpty ? nil : Store(username: username)
+        Task { @MainActor in Outbox.shared.kick() }   // send anything this account left queued
     }
     static func close() { current = nil }
 
@@ -30,6 +31,9 @@ import SQLite3
             CREATE TABLE IF NOT EXISTS chats(chat TEXT PRIMARY KEY, read_id INTEGER DEFAULT 0,
                 delivered_id INTEGER DEFAULT 0, marked_seen INTEGER DEFAULT 0, draft TEXT DEFAULT '');
             CREATE TABLE IF NOT EXISTS friends(username TEXT PRIMARY KEY, status INTEGER, position INTEGER);
+            CREATE TABLE IF NOT EXISTS outbox(seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE NOT NULL,
+                json TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS confirmed(msg_id INTEGER PRIMARY KEY);
             """)
     }
 
@@ -95,6 +99,18 @@ import SQLite3
         }
         exec("COMMIT")
     }
+
+    // MARK: Outbox (Outbox.swift); entries kept in insertion order
+
+    func outbox() -> [String] { query("SELECT json FROM outbox ORDER BY seq").compactMap { $0[0] as? String } }
+    func addOutbox(id: String, json: String) { run("INSERT INTO outbox(id, json) VALUES(?, ?)", id, json) }
+    func updateOutbox(id: String, json: String) { run("UPDATE outbox SET json = ? WHERE id = ?", json, id) }
+    func removeOutbox(id: String) { run("DELETE FROM outbox WHERE id = ?", id) }
+
+    /// Message ids the outbox has already matched to a send, so two identical messages aren't both
+    /// claimed by one server message when checking whether an unconfirmed send went through.
+    func confirm(_ msgId: Int) { run("INSERT OR IGNORE INTO confirmed(msg_id) VALUES(?)", msgId) }
+    func isConfirmed(_ msgId: Int) -> Bool { !query("SELECT 1 FROM confirmed WHERE msg_id = ?", msgId).isEmpty }
 
     // MARK: SQLite plumbing
 
