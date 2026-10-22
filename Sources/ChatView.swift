@@ -94,7 +94,7 @@ struct ChatView: View {
             }
             // An inset (rather than a stacked view) so rows pass behind the glass composer.
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                composer
+                bottomBar
                     // Remember the real keyboard's height so the emoji panel matches it.
                     .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { note in
                         if !showingEmoji, let f = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect, f.height > 100 {
@@ -166,7 +166,8 @@ struct ChatView: View {
                 let st = store.state(chat: friend)
                 readId = max(readId, st.readId); deliveredId = max(deliveredId, st.deliveredId)
                 markedSeen = max(markedSeen, st.markedSeen)
-                if draft.isEmpty { draft = st.draft }
+                // Also after a dictation finished as the draft while something covered the chat.
+                if draft.isEmpty || (st.draft != draft && st.draft.hasPrefix(draft)) { draft = st.draft }
                 append(store.messages(chat: friend, limit: 100), persist: false)
             }
             showOutbox()
@@ -178,9 +179,19 @@ struct ChatView: View {
         .onAppear {
             Notifier.shared.activeChat = friend
             canDictate = DictationSettings.isSetUp
+            #if DEBUG
+            if Transcription.debugFake != nil { canDictate = true }
+            #endif
         }
         .onDisappear {
-            dictation.cancel()
+            // A recording or transcript in progress becomes this chat's draft.
+            let chat = friend
+            dictation.leave { text in
+                guard let store = Store.current else { return }
+                var st = store.state(chat: chat)
+                st.draft = Dictation.join(st.draft, text)
+                store.save(chat: chat, state: st)
+            }
             if Notifier.shared.activeChat == friend { Notifier.shared.activeChat = nil }
             reporter?.stop()
             if Whatsup.shared.chat?.target == friend { Whatsup.shared.chat = nil }
@@ -313,51 +324,63 @@ struct ChatView: View {
         .padding(.horizontal, 16).padding(.vertical, 8)
     }
 
-    // Dictation: tap to talk, tap again to stop. The words land in the message as they form.
-    func micTapped() {
-        switch dictation.state {
-        case .idle:
-            dictation.onText = { draft = $0 }
-            Task { await dictation.start(after: draft) }
-        case .listening: dictation.stop()
-        case .finishing: break
-        }
-    }
-
-    var showsMic: Bool { dictation.state != .idle || (canDictate && !canSend) }
-
-    // Tap: start / stop dictating. Hold while dictating: stop, and send once the last words are in.
-    var micButton: some View {
+    // The composer, or dictation in its place while recording or reviewing a transcript.
+    var bottomBar: some View {
         Group {
-            switch dictation.state {
-            case .idle:
-                Image(systemName: "mic").font(.system(size: 18)).foregroundStyle(.secondary)
-            case .listening:
-                Image(systemName: "waveform").font(.system(size: 15, weight: .bold)).foregroundStyle(.white)
-                    .symbolEffect(.variableColor.iterative, isActive: true)
-                    .frame(width: 30, height: 30)
-                    .background(Circle().fill(.red))
-            case .finishing:
-                ProgressView()
+            if dictation.phase == .idle {
+                VStack(spacing: 6) {
+                    if let notice = dictation.notice { noticeView(notice) }
+                    composer
+                }
+            } else {
+                VoicePanel(dictation: dictation, onSend: { sendText($0) }, onEdit: { text in
+                    draft = Dictation.join(draft, text)
+                    typing = true
+                })
             }
         }
-        .frame(width: 30, height: 30)
-        .contentShape(Rectangle())
-        .onTapGesture { micTapped() }
-        .onLongPressGesture(minimumDuration: 0.4) {
-            guard dictation.state == .listening else { micTapped(); return }
-            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-            dictation.stop(then: { send() })
+        .animation(.snappy(duration: 0.25), value: dictation.phase)
+    }
+
+    func noticeView(_ notice: Dictation.Notice) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "mic.slash").foregroundStyle(.secondary)
+            Text(notice == .micOff ? "Microphone access is off." : "Couldn't start the microphone.")
+                .font(.subheadline)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if notice == .micOff {
+                Button("Settings") {
+                    if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
+                }
+                .font(.subheadline.weight(.semibold))
+            }
+            Button { dictation.notice = nil } label: { Image(systemName: "xmark").font(.footnote.weight(.semibold)) }
+                .foregroundStyle(.secondary)
+                .accessibilityLabel("Dismiss")
         }
+        .padding(.horizontal, 16).padding(.vertical, 10)
+        .glass(in: Capsule())
+        .padding(.horizontal, 16)
+    }
+
+    // Mic while the message is empty: dictation takes the composer's place (VoicePanel).
+    func micTapped() {
+        typing = false
+        showingEmoji = false
+        Task { await dictation.start() }
+    }
+
+    var showsMic: Bool { canDictate && !canSend }
+
+    var micButton: some View {
+        Button(action: micTapped) {
+            Image(systemName: "mic").font(.system(size: 18)).foregroundStyle(.secondary)
+                .frame(width: 30, height: 30)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
         .padding(4)
-        .accessibilityElement()
-        .accessibilityAddTraits(.isButton)
-        .accessibilityLabel(dictation.state == .listening ? "Stop Dictation" : "Dictate")
-        .accessibilityAction { micTapped() }
-        .accessibilityAction(named: "Stop and Send") { if dictation.state == .listening { dictation.stop(then: { send() }) } }
-        .alert("Dictation", isPresented: Binding(get: { dictation.error != nil }, set: { if !$0 { dictation.error = nil } })) {
-            Button("OK") {}
-        } message: { Text(dictation.error ?? "") }
+        .accessibilityLabel("Dictate")
     }
 
     var field: some View {
@@ -384,7 +407,7 @@ struct ChatView: View {
             .padding(.vertical, 4)
             .padding(.trailing, showsMic || canSend ? 0 : 6)
             .accessibilityLabel(showingEmoji ? "Keyboard" : "Emoji")
-            // One trailing slot, like iMessage: the mic while empty (or dictating), the send arrow once there's text.
+            // One trailing slot, like iMessage: the mic while empty, the send arrow once there's text.
             if showsMic {
                 micButton
             } else if canSend {
@@ -552,19 +575,14 @@ struct ChatView: View {
     func debugScripts() {
         guard !Self.debugScriptsRan else { return }   // .task runs again when the chat reappears
         Self.debugScriptsRan = true
-            if ProcessInfo.processInfo.arguments.contains("-fakeDictation") {
-                // Text arriving like dictation: whole words at a time, the in-progress tail rewritten.
+            if let i = ProcessInfo.processInfo.arguments.firstIndex(of: "-autoRecord") {
+                // Dictation on its own: starts at 2 s, Stop after the given seconds (-micFile, -fakeTranscript).
+                let length = Double(ProcessInfo.processInfo.arguments[i + 1]) ?? 6
                 Task {
                     try? await Task.sleep(for: .seconds(2))
-                    let args = ProcessInfo.processInfo.arguments
-                    if args.contains("-autoclose") { try? await Task.sleep(for: .seconds(5)) }   // a video opens and closes first
-                    if args.contains("-realMic") { dictation.debugListen() }
-                    let words = "so I was thinking that we could maybe go out to get some food later tonight if you are not too tired from work and then we can watch a movie or something and honestly I would really love that because it has been such a long week and I miss you a lot so please let me know what you think about all of this okay".split(separator: " ")
-                    var done = ""
-                    for w in words {
-                        draft = done + String(w.prefix(2)); try? await Task.sleep(for: .seconds(0.12))
-                        done += w + " "; draft = done; try? await Task.sleep(for: .seconds(0.12))
-                    }
+                    await dictation.start()
+                    try? await Task.sleep(for: .seconds(length))
+                    dictation.stop()
                 }
             }
             if ProcessInfo.processInfo.arguments.contains("-fakeTyping") {
@@ -644,10 +662,14 @@ struct ChatView: View {
     func send() {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
-        dictation.cancel()   // nothing more of it may land in the next message
         draft = ""
         let seconds = typingMs / 1000
         typingMs = 0; lastEdit = nil
+        sendText(text, typingSeconds: seconds)
+    }
+
+    func sendText(_ text: String, typingSeconds seconds: Double = 0) {
+        guard !text.isEmpty else { return }
         let e = Outbox.shared.addText(chat: friend, text: text, typingSeconds: seconds)
         messages.append(Msg(id: e.id, text: HTMLText.encode(text), mine: true, pending: e.state))
     }

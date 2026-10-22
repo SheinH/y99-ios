@@ -2,29 +2,34 @@ import SwiftUI
 import AVFoundation
 import Security
 
-// Dictation with MAI-Transcribe-2-Streaming over its Realtime WebSocket API, ported from the Whisperer
-// desktop app (Qt/whisperer/StreamingTranscriber.cpp). The microphone streams 16 kHz mono PCM while you
-// talk; finalized words and the service's current guess for the rest appear in the message as they form.
-// Tapping stop commits the audio and waits for the full transcript. Nothing is retried: text is already
-// in the message, so a dictation can't be sent again without doubling it.
+// Dictation settings (account menu > Dictation) and the record -> review -> send mode in the composer.
+// The service and microphone parts are in Transcription.swift.
 
 enum DictationSettings {
     private static let d = UserDefaults.standard
+    #if DEBUG
+    /// Simulator tests: the same environment variables the Whisperer desktop app reads come first.
+    private static func env(_ name: String) -> String? {
+        ProcessInfo.processInfo.environment[name].flatMap { $0.isEmpty ? nil : $0 }
+    }
+    #else
+    private static func env(_ name: String) -> String? { nil }
+    #endif
     static var endpoint: String {
-        get { d.string(forKey: "maiEndpoint") ?? "" }
+        get { env("AZURE_MAI_ENDPOINT") ?? d.string(forKey: "maiEndpoint") ?? "" }
         set { d.set(newValue.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "maiEndpoint") }
     }
     static var deployment: String {
-        get { d.string(forKey: "maiDeployment") ?? "" }
+        get { env("AZURE_MAI_DEPLOYMENT_NAME") ?? d.string(forKey: "maiDeployment") ?? "" }
         set { d.set(newValue.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "maiDeployment") }
     }
     /// Optional, e.g. "en". Empty: the service detects the language.
     static var language: String {
-        get { d.string(forKey: "maiLanguage") ?? "" }
+        get { env("AZURE_MAI_LANGUAGE") ?? d.string(forKey: "maiLanguage") ?? "" }
         set { d.set(newValue.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "maiLanguage") }
     }
     static var apiKey: String {
-        get { Keychain.get("maiApiKey") ?? "" }
+        get { env("AZURE_MAI_API_KEY") ?? Keychain.get("maiApiKey") ?? "" }
         set { Keychain.set("maiApiKey", newValue.trimmingCharacters(in: .whitespacesAndNewlines)) }
     }
 
@@ -61,251 +66,208 @@ enum Keychain {
     }
 }
 
+/// Dictation as its own mode, in the composer's place: record -> transcribing -> review -> send.
+/// Nothing goes into the message while recording; the live words are only a preview. The recording is
+/// kept until it's sent or thrown away, so Redo can transcribe it again.
 @MainActor final class Dictation: ObservableObject {
-    enum State { case idle, listening, finishing }
-    @Published private(set) var state: State = .idle
-    @Published var error: String?
-    /// The whole message as it should read now: what was there before, then the dictation so far.
-    var onText: ((String) -> Void)?
-    private var afterFinish: (() -> Void)?
+    enum Phase { case idle, recording, transcribing, review }
+    /// Inline message over the composer.
+    enum Notice { case micOff, micFailed }
 
-    private static let sampleRate = 16_000.0
-    private static let maxAppendBytes = 16_000          // 0.5 s per append when catching up
-    private static let connectTimeout: Duration = .seconds(5)
-    private static let deadline: Duration = .seconds(8) // from the stop to the full transcript
+    @Published private(set) var phase: Phase = .idle { didSet { if phase != oldValue { announce() } } }
+    @Published private(set) var preview = ""      // recording: what's been heard so far
+    @Published private(set) var levels: [Float] = []
+    @Published private(set) var seconds = 0.0
+    @Published var transcript = ""                // review: editable
+    @Published private(set) var problem: String?  // review: why there's no transcript
+    @Published var notice: Notice?
 
-    private var task: URLSessionWebSocketTask?
-    private var engine: AVAudioEngine?
-    private var ready = false        // session configured; audio can go
-    private var pending = Data()     // audio captured before that
-    private var sentAny = false
-    private var stopped = false
-    private var committed = false
-    private var base = ""            // the message before this dictation
-    private var finalText = ""       // text the service won't change any more
-    private var tail = ""            // its current guess after that
-    private var timer: Task<Void, Never>?
+    static let maxSeconds = 300.0
 
-    /// Starts listening, adding to `message`.
-    func start(after message: String) async {
-        guard state == .idle else { return }
-        guard await AVAudioApplication.requestRecordPermission() else {
-            error = "Microphone access is off. Turn it on in Settings > Y99."
-            return
+    private var audio = Data()
+    private var mic: Mic?
+    private var live: Transcription?     // follows the recording for the preview, then gives the transcript
+    private var redoing: Transcription?
+    private var job: Task<Void, Never>?
+    private var run = 0                  // bumped on discard, so late results are dropped
+    private var saveOnReview: ((String) -> Void)?
+    private var background: NSObjectProtocol?
+
+    var canSend: Bool { phase == .review && !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
+    func start() async {
+        guard phase == .idle else { return }
+        notice = nil
+        #if DEBUG
+        let fakeMic = Mic.debugFile != nil
+        #else
+        let fakeMic = false
+        #endif
+        let allowed = fakeMic ? true : await AVAudioApplication.requestRecordPermission()
+        guard allowed else { notice = .micOff; return }
+        guard phase == .idle else { return }
+        reset()
+        let mic = Mic()
+        mic.onChunk = { [weak self] in self?.captured($0) }
+        mic.onEnd = { [weak self] in self?.stop() }   // keep what was said, go to review
+        do { try mic.start() } catch { notice = .micFailed; return }
+        self.mic = mic
+        let live = Transcription()
+        live.onPreview = { [weak self] text in if self?.phase == .recording { self?.preview = Self.lastWords(text) } }
+        self.live = live
+        background = NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification,
+                                                            object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.stop() }
         }
-        guard let url = DictationSettings.realtimeURL, state == .idle else { return }
-        base = message.isEmpty || message.last?.isWhitespace == true ? message : message + " "
-        finalText = ""; tail = ""
-        ready = false; pending = Data(); sentAny = false; stopped = false; committed = false
-        do {
-            try startAudio()   // before connecting, so nothing said meanwhile is lost
-        } catch {
-            fail("Couldn't start the microphone.")
-            return
-        }
-        state = .listening
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        phase = .recording
+    }
 
-        var req = URLRequest(url: url)
-        req.setValue(DictationSettings.apiKey, forHTTPHeaderField: "api-key")
-        let t = URLSession.shared.webSocketTask(with: req)
-        task = t
-        t.resume()
-        receive(t)
-        timer = Task { [weak self] in
-            try? await Task.sleep(for: Self.connectTimeout)
-            guard !Task.isCancelled, let self, self.task === t, !self.ready else { return }
-            self.fail("Timed out connecting to the transcription service.")
+    /// Ends the recording and transcribes it. Never sends.
+    func stop() {
+        guard phase == .recording else { return }
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        phase = .transcribing
+        removeBackgroundObserver()
+        let run = self.run
+        job = Task {
+            // The end of the last word is often still on its way in when Stop is tapped.
+            try? await Task.sleep(for: .milliseconds(300))
+            guard run == self.run else { return }
+            mic?.stop(); mic = nil
+            await transcribe(first: live)
         }
     }
 
-    /// Stops listening; the rest of the transcript follows. `then` runs once it has all arrived
-    /// (not on a failure or cancel, which keep the text for you to look at).
-    func stop(then: (() -> Void)? = nil) {
-        guard state == .listening else { return }
-        afterFinish = then
-        stopAudio()
-        stopped = true
-        state = .finishing
-        if ready { commit() }
-        timer?.cancel()
-        timer = Task { [weak self] in
-            try? await Task.sleep(for: Self.deadline)
-            guard !Task.isCancelled, let self, self.state == .finishing else { return }
-            self.fail("Timed out waiting for the transcript.")
+    /// Transcribes the same recording again, from scratch.
+    func redo() {
+        guard phase == .review, !audio.isEmpty else { return }
+        phase = .transcribing
+        problem = nil
+        let run = self.run
+        job = Task { guard run == self.run else { return }; await transcribe(first: nil) }
+    }
+
+    /// Drops the recording and any transcript.
+    func discard() {
+        reset()
+        phase = .idle
+    }
+
+    /// The transcript, for sending or editing; dictation goes back to idle.
+    func take() -> String {
+        let text = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        reset()
+        phase = .idle
+        return text
+    }
+
+    /// Leaving the chat: the transcript is saved as the draft by `save`, now or once it's ready.
+    func leave(save: @escaping (String) -> Void) {
+        switch phase {
+        case .idle: return
+        case .review:
+            let text = take()
+            if !text.isEmpty { save(text) }
+        case .recording, .transcribing:
+            saveOnReview = save
+            stop()
         }
     }
 
-    /// Drops the dictation (message sent, chat left). What's final stays; nothing more arrives.
-    func cancel() {
-        guard state != .idle else { return }
-        tail = ""
-        emit()
-        close()
+    /// `existing` followed by `added`, with a space between.
+    static func join(_ existing: String, _ added: String) -> String {
+        guard !existing.isEmpty else { return added }
+        return existing + (existing.last!.isWhitespace ? "" : " ") + added
     }
 
-    #if DEBUG
-    /// Harness: the microphone and the listening look without the transcription service.
-    func debugListen() { try? startAudio(); state = .listening }
-    #endif
-
-    // MARK: Audio
-
-    private func startAudio() throws {
-        let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.record, mode: .measurement)
-        try session.setActive(true)
-        let engine = AVAudioEngine()
-        let input = engine.inputNode
-        let inFormat = input.outputFormat(forBus: 0)
-        guard inFormat.sampleRate > 0,
-              let outFormat = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: Self.sampleRate, channels: 1, interleaved: true),
-              let converter = AVAudioConverter(from: inFormat, to: outFormat) else {
-            throw CocoaError(.featureUnsupported)
-        }
-        let ratio = Self.sampleRate / inFormat.sampleRate
-        input.installTap(onBus: 0, bufferSize: 4096, format: inFormat) { [weak self] buffer, _ in
-            let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio + 64)
-            guard let out = AVAudioPCMBuffer(pcmFormat: outFormat, frameCapacity: capacity) else { return }
-            var fed = false
-            var err: NSError?
-            converter.convert(to: out, error: &err) { _, status in
-                if fed { status.pointee = .noDataNow; return nil }
-                fed = true
-                status.pointee = .haveData
-                return buffer
-            }
-            guard err == nil, out.frameLength > 0, let samples = out.int16ChannelData else { return }
-            let bytes = Data(bytes: samples[0], count: Int(out.frameLength) * 2)
-            Task { @MainActor in self?.captured(bytes) }
-        }
-        engine.prepare()
-        try engine.start()
-        self.engine = engine
-    }
-
-    private func stopAudio() {
-        engine?.inputNode.removeTap(onBus: 0)
-        engine?.stop()
-        engine = nil
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-    }
+    // MARK: Private
 
     private func captured(_ bytes: Data) {
-        guard state == .listening else { return }
-        if ready { append(bytes) } else { pending.append(bytes) }
-    }
-
-    private func append(_ audio: Data) {
-        var pos = audio.startIndex
-        while pos < audio.endIndex {
-            let end = min(pos + Self.maxAppendBytes, audio.endIndex)
-            send(["type": "input_audio_buffer.append", "audio": audio[pos..<end].base64EncodedString()])
-            sentAny = true
-            pos = end
+        guard phase == .recording else {
+            if phase == .transcribing, mic != nil { audio.append(bytes); live?.append(bytes) }   // Stop's grace period
+            return
         }
-    }
-
-    private func commit() {
-        guard sentAny else { finish(); return }   // nothing recorded, nothing to ask
-        send(["type": "input_audio_buffer.commit"])
-        committed = true
-    }
-
-    // MARK: Socket
-
-    private func send(_ obj: [String: Any]) {
-        guard let data = try? JSONSerialization.data(withJSONObject: obj) else { return }
-        task?.send(.string(String(decoding: data, as: UTF8.self))) { _ in }
-    }
-
-    private func receive(_ t: URLSessionWebSocketTask) {
-        t.receive { [weak self] result in
-            Task { @MainActor in
-                guard let self, self.task === t else { return }
-                switch result {
-                case .success(let message):
-                    switch message {
-                    case .string(let s): self.handle(s)
-                    case .data(let d): self.handle(String(decoding: d, as: UTF8.self))
-                    @unknown default: break
-                    }
-                    if self.task === t { self.receive(t) }
-                case .failure(let e):
-                    self.fail("Connection lost: \(e.localizedDescription)")
-                }
-            }
+        audio.append(bytes)
+        live?.append(bytes)
+        // A meter bar per ~50 ms chunk.
+        var chunk = bytes.startIndex
+        let step = PCM.bytesPerSecond / 20
+        while chunk < bytes.endIndex {
+            let end = min(chunk + step, bytes.endIndex)
+            levels.append(PCM.level(bytes[chunk..<end]))
+            chunk = end
         }
+        if levels.count > 80 { levels.removeFirst(levels.count - 80) }
+        seconds = Double(audio.count) / Double(PCM.bytesPerSecond)
+        if seconds >= Self.maxSeconds { stop() }
     }
 
-    private func handle(_ text: String) {
-        guard let event = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any],
-              let type = event["type"] as? String else { return }
-        switch type {
-        case "session.created":
-            // Settings go before any audio. No turn detection: the stop button ends the dictation via the
-            // commit. Without a language the service detects it (it rejects an explicit null).
-            var transcription: [String: Any] = ["model": DictationSettings.deployment]
-            let language = DictationSettings.language
-            if !language.isEmpty { transcription["language"] = language }
-            let input: [String: Any] = [
-                "format": ["type": "audio/pcm", "rate": Int(Self.sampleRate)],
-                "transcription": transcription,
-                "turn_detection": NSNull(),
-                "noise_reduction": NSNull(),
-            ]
-            send(["type": "session.update", "session": ["type": "transcription", "audio": ["input": input]]])
-        case "session.updated":
-            ready = true
-            if state == .listening { timer?.cancel() }
-            append(pending)
-            pending = Data()
-            if stopped && !committed { commit() }
-        case "conversation.item.input_audio_transcription.delta":
-            // Newly finalized text. It may already be showing as the start of the guess.
-            let delta = event["delta"] as? String ?? ""
-            if tail.hasPrefix(delta) { tail.removeFirst(delta.count) } else { tail = "" }
-            finalText += delta
-            emit()
-        case "conversation.item.input_audio_transcription.intermediate":
-            tail = event["intermediate"] as? String ?? ""
-            emit()
-        case "conversation.item.input_audio_transcription.completed" where committed:
-            // The whole transcript; the deltas should have brought all of it already.
-            let transcript = event["transcript"] as? String ?? ""
-            if transcript.hasPrefix(finalText) { finalText = transcript }
-            tail = ""
-            emit()
-            finish()
-        default:
-            if type == "error" || type.hasSuffix(".failed") {
-                let detail = (event["error"] as? [String: Any])?["message"] as? String
-                fail("Transcription service error: \(detail ?? String(text.prefix(300)))")
-            }
+    /// The final transcript. A fresh request gets the whole saved recording at once: it hears all of it
+    /// before writing anything, so its text comes out cleaner (no "en- be able to" stutters kept from
+    /// the live guesses). The live session's own transcript is the fallback if that one fails.
+    private func transcribe(first session: Transcription?) async {
+        let run = self.run
+        let duration = Double(audio.count) / Double(PCM.bytesPerSecond)
+        var text: String?
+        if duration < 0.3 {
+            text = ""
+        } else {
+            let full = Transcription()
+            redoing = full
+            full.append(audio)
+            async let fullText = try? full.finish(timeout: .seconds(15 + duration / 2))
+            var liveText: String?
+            if let session, session.failure == nil { liveText = try? await session.finish(timeout: .seconds(10)) }
+            text = await fullText ?? liveText
         }
+        guard run == self.run else { return }
+        live = nil; redoing = nil
+        transcript = text ?? ""
+        problem = text == nil ? "Couldn't transcribe. Try Redo." : text!.isEmpty ? "No speech detected." : nil
+        if let save = saveOnReview {
+            let text = take()
+            if !text.isEmpty { save(text) }
+            return
+        }
+        phase = .review
     }
 
-    private func emit() { onText?(base + finalText + tail) }
-
-    private func finish() {
-        let then = afterFinish
-        close()
-        then?()
+    private func reset() {
+        run += 1
+        job?.cancel(); job = nil
+        mic?.stop(); mic = nil
+        live?.cancel(); live = nil
+        redoing?.cancel(); redoing = nil
+        removeBackgroundObserver()
+        saveOnReview = nil
+        audio = Data()
+        preview = ""; levels = []; seconds = 0
+        transcript = ""; problem = nil
     }
 
-    private func fail(_ reason: String) {
-        DebugLog.log("dictation: \(reason)")
-        if !tail.isEmpty { tail = ""; emit() }
-        close()
-        error = reason
+    private func removeBackgroundObserver() {
+        if let background { NotificationCenter.default.removeObserver(background) }
+        background = nil
     }
 
-    private func close() {
-        afterFinish = nil
-        timer?.cancel(); timer = nil
-        if engine != nil { stopAudio() }
-        task?.cancel(with: .normalClosure, reason: nil)
-        task = nil
-        state = .idle
+    /// The end of the running transcript, about two lines' worth, cut at a word.
+    private static func lastWords(_ text: String) -> String {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard text.count > 90 else { return text }
+        var cut = String(text.suffix(90))
+        if let space = cut.firstIndex(of: " ") { cut = String(cut[cut.index(after: space)...]) }
+        return "…" + cut
+    }
+
+    private func announce() {
+        let words: String? = switch phase {
+        case .recording: "Recording"
+        case .transcribing: "Transcribing"
+        case .review: problem ?? "Transcript ready"
+        case .idle: nil
+        }
+        if let words { AccessibilityNotification.Announcement(words).post() }
     }
 }
 

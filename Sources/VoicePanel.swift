@@ -1,0 +1,165 @@
+import SwiftUI
+
+// Dictation's place in the composer while it's on (see Dictation). Recording: the words heard so far
+// above a row of Discard, the timer and level meter, and Stop. Then the transcript to check and fix,
+// with Discard, Redo, Edit (into the normal message field) and Send.
+struct VoicePanel: View {
+    @ObservedObject var dictation: Dictation
+    let onSend: (String) -> Void
+    let onEdit: (String) -> Void
+
+    var body: some View {
+        Group {
+            if dictation.phase == .recording { recording } else { review }
+        }
+        .padding(.horizontal, 16).padding(.vertical, 8)
+    }
+
+    // MARK: Recording
+
+    var recording: some View {
+        VStack(spacing: 10) {
+            Text(dictation.preview.isEmpty ? "Listening…" : dictation.preview)
+                .font(.subheadline).italic()
+                .foregroundStyle(.secondary)
+                .lineLimit(2, reservesSpace: true)
+                .truncationMode(.head)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 16).padding(.vertical, 10)
+                .glass(in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                .accessibilityLabel(dictation.preview.isEmpty ? "Listening" : "Hearing: \(dictation.preview)")
+            HStack(spacing: 10) {
+                circleButton("trash", "Discard recording") { dictation.discard() }
+                HStack(spacing: 10) {
+                    Image(systemName: "circle.fill")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.red)
+                        .symbolEffect(.pulse, options: .repeating)
+                    Text(Self.clock(dictation.seconds))
+                        .font(.body.monospacedDigit())
+                    LevelMeter(levels: dictation.levels)
+                        .frame(height: 26)
+                }
+                .padding(.horizontal, 16)
+                .frame(maxWidth: .infinity, minHeight: 48)
+                .glass(in: Capsule())
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Recording, \(Self.clock(dictation.seconds))")
+                Button { dictation.stop() } label: {
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(.white)
+                        .frame(width: 20, height: 20)
+                        .frame(width: 56, height: 56)
+                        .tinted(.red, in: Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Stop and review")
+            }
+        }
+    }
+
+    // MARK: Transcribing / review
+
+    var review: some View {
+        let ready = dictation.phase == .review
+        return VStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 6) {
+                if !ready {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                        Text("Transcribing…").foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading)
+                } else if let problem = dictation.problem {
+                    Label(problem, systemImage: "exclamationmark.bubble")
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading)
+                } else {
+                    TextField("Transcript", text: $dictation.transcript, axis: .vertical)
+                        .lineLimit(1...5)
+                        .accessibilityLabel("Transcript")
+                    Text("Tap text to fix a word")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .padding(.horizontal, 16).padding(.vertical, 12)
+            .glass(in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            HStack(spacing: 10) {
+                circleButton("trash", "Discard recording") { dictation.discard() }
+                circleButton("arrow.counterclockwise", "Redo transcription") { dictation.redo() }
+                    .disabled(!ready)
+                circleButton("pencil", "Edit in message field") { onEdit(dictation.take()) }
+                    .disabled(!dictation.canSend)
+                Button { onSend(dictation.take()) } label: {
+                    Label("Send", systemImage: "arrow.up")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity, minHeight: 48)
+                        .tinted(Color.accentColor, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(!dictation.canSend)
+                .opacity(dictation.canSend ? 1 : 0.4)
+            }
+        }
+    }
+
+    func circleButton(_ symbol: String, _ label: String, action: @escaping () -> Void) -> some View {
+        CircleButton(symbol: symbol, action: action).accessibilityLabel(label)
+    }
+
+    static func clock(_ seconds: Double) -> String {
+        let s = Int(seconds)
+        return String(format: "%d:%02d", s / 60, s % 60)
+    }
+}
+
+private struct CircleButton: View {
+    let symbol: String
+    let action: () -> Void
+    @Environment(\.isEnabled) private var enabled
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 18, weight: .medium))
+                .foregroundStyle(.primary)
+                .frame(width: 48, height: 48)
+                .glass(in: Circle())
+                .opacity(enabled ? 1 : 0.4)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// Bars for the most recent loudness, newest on the right. Drawn, so it never changes the layout.
+struct LevelMeter: View {
+    let levels: [Float]
+
+    var body: some View {
+        Canvas { ctx, size in
+            let bar: CGFloat = 3, step: CGFloat = 6
+            var x = size.width - bar
+            for level in levels.reversed() {
+                guard x >= 0 else { break }
+                let h = max(bar, CGFloat(level) * size.height)
+                let r = CGRect(x: x, y: (size.height - h) / 2, width: bar, height: h)
+                ctx.fill(Path(roundedRect: r, cornerRadius: bar / 2), with: .style(.secondary))
+                x -= step
+            }
+        }
+        .accessibilityHidden(true)
+    }
+}
+
+extension View {
+    /// Tinted Liquid Glass on iOS 26 (Send, Stop); a solid fill before it.
+    @ViewBuilder func tinted(_ color: Color, in shape: some Shape) -> some View {
+        if #available(iOS 26, *) {
+            glassEffect(.regular.tint(color).interactive(), in: shape)
+        } else {
+            background(shape.fill(color))
+        }
+    }
+}

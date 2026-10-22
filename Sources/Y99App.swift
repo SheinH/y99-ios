@@ -18,6 +18,12 @@ struct Y99App: App {
         if args.contains("-emojiPreview") || args.contains("-videoPreview") || args.contains("-rawSeed") {
             URLProtocol.registerClass(NoNetwork.self)
         }
+        if let i = args.firstIndex(of: "-transcribeTest"), i + 1 < args.count {
+            let url = URL(fileURLWithPath: args[i + 1])
+            Task { @MainActor in await TranscribeTest.run(url) }
+        }
+        if let i = args.firstIndex(of: "-micFile"), i + 1 < args.count { Mic.debugFile = URL(fileURLWithPath: args[i + 1]) }
+        if let i = args.firstIndex(of: "-fakeTranscript"), i + 1 < args.count { Transcription.debugFake = args[i + 1] }
         #endif
         Task.detached(priority: .background) { DiskCache.trim() }   // keep media under 500 MB
         // Must be registered before launch finishes.
@@ -134,7 +140,9 @@ struct Y99App: App {
 /// Fails every web request (see Y99App.init): seeded harness runs must not contact y99's servers.
 final class NoNetwork: URLProtocol {
     override class func canInit(with request: URLRequest) -> Bool {
-        ["http", "https", "ws", "wss"].contains(request.url?.scheme ?? "")
+        // The transcription service (Azure, not y99) stays reachable for dictation checks.
+        guard request.url?.host != DictationSettings.realtimeURL?.host else { return false }
+        return ["http", "https", "ws", "wss"].contains(request.url?.scheme ?? "")
     }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() { client?.urlProtocol(self, didFailWithError: URLError(.notConnectedToInternet)) }
