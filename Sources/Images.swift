@@ -150,8 +150,10 @@ struct ChatImage: View {
     @State private var settled = false
     @State private var attempt = 0
     private static let retryDelays: [Double] = [2, 5, 15, 30]
-    @State private var viewing = false
-    @State private var viewerImage: UIImage?   // full size, read from disk only while the viewer is open
+    // The full size, read from disk only while the viewer is open. Handed to the cover as its item, so
+    // it can never present without a picture.
+    @State private var viewer: Viewed?
+    private struct Viewed: Identifiable { let id = UUID(); let image: UIImage }
     @Environment(\.displayScale) private var scale
     @Namespace private var zoom
 
@@ -167,7 +169,9 @@ struct ChatImage: View {
                 AnimatedImageView(image: image)
                     .frame(width: fitted(image.size).width, height: fitted(image.size).height)
                     .contentShape(Rectangle())
-                    .onTapGesture { Task { viewerImage = await fullSize() ?? image; viewing = true } }
+                    .onTapGesture {
+                        Task { if let full = await fullSize() ?? image { viewer = Viewed(image: full) } }
+                    }
             } else if expired {
                 // Gone for good: a quiet note, not a placeholder box for a picture that will never come.
                 Label("Photo expired", systemImage: Self.expiredSymbol)
@@ -189,9 +193,7 @@ struct ChatImage: View {
         }
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .zoomSource(id, zoom)
-        .fullScreenCover(isPresented: $viewing, onDismiss: { viewerImage = nil }) {
-            if let viewerImage { ImageViewer(image: viewerImage).zoomTransition(id, zoom) }
-        }
+        .fullScreenCover(item: $viewer) { ImageViewer(image: $0.image).zoomTransition(id, zoom) }
         .task(id: "\(id)|\(source.key)|\(attempt)") {   // also reloads when the address arrives
             await load()
             guard !settled, attempt < Self.retryDelays.count else { return }
