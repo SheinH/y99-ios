@@ -1,0 +1,44 @@
+name: Y99
+options:
+  bundleIdPrefix: com.sanhtike
+  deploymentTarget:
+    iOS: "18.0"
+packages:
+  SDWebImage:
+    url: https://github.com/SDWebImage/SDWebImage
+    from: 5.19.0
+targets:
+  Y99:
+    type: application
+    platform: iOS
+    sources:
+      - Sources
+      - path: Blobs          # baked blob emoji originals, looked up as Blobs/<name>.webp (local only;
+        type: folder         # without it the app downloads them from y99)
+        optional: true
+        buildPhase: resources
+    info:
+      path: Info.plist
+      properties:
+        UIBackgroundModes: [fetch]
+        CFBundleURLTypes:
+          - CFBundleURLName: com.sanhtike.y99mvp
+            CFBundleURLSchemes: [y99]
+        BGTaskSchedulerPermittedIdentifiers: [com.sanhtike.y99mvp.refresh]
+    dependencies:
+      - package: SDWebImage
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.sanhtike.y99mvp
+        DEVELOPMENT_TEAM: JYM2RUS977
+        CODE_SIGN_STYLE: Automatic
+        TARGETED_DEVICE_FAMILY: "1"
+        GENERATE_INFOPLIST_FILE: YES
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Y99
+        INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        INFOPLIST_KEY_NSCameraUsageDescription: Take a photo to send in a chat.
+        INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription: Save photos you take to your library.

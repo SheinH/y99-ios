@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192" width="192" height="192">
+  <!-- Each shape tucks under the one drawn after it but stops short of the outer edge, so no underlying colour fringes the outline. -->
+  <path fill="#DCADED" d="M3.4,73.5 L47,116.5 L51.5,177 L88.5,177 L91,120 L48,83 L92,63 L101,15.5 L65.2,15.5 L48.5,57 Z"/>
+  <path fill="#BC489B" d="M118.2,15.5 L150.5,52.4 L188.5,62.2 L176,103.4 L184,151.5 L142.8,142.6 L105.3,177 L96,150 L96,128 Z"/>
+  <path fill="#E87AB8" d="M101,15.5 L82,63 L40.5,81.5 L82,119 L88.5,177 L105.3,177 L101,133 L105,110 L110,70 L115,40 L118.2,15.5 Z"/>
+  <path fill="#CC72B0" d="M118.2,15.5 L148.5,50 C153,86 130,122 101,133 L100.2,121 L56,84.5 L103,62.5 Z"/>
+</svg>
