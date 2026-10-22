@@ -79,11 +79,15 @@ struct ChatView: View {
                             .padding(.horizontal, 16)
                             .flipped()
                     }
-                    // Reaching the far end (oldest loaded) pages in older history.
-                    Group {
+                    // Reaching the far end (oldest loaded) pages in older history. A ZStack, not a Group: a
+                    // Group's onAppear fires per child, so every spinner -> clear swap re-ran it, retrying a
+                    // failed fetch in a tight loop. The id makes it fire again (if still on screen) whenever the
+                    // oldest message changes: after a page lands, or once the first messages arrive.
+                    ZStack {
                         if loadingOlder { ProgressView().padding(.vertical, 8) } else { Color.clear.frame(height: 1) }
                     }
                     .frame(maxWidth: .infinity)
+                    .id(messages.first(where: { $0.serverId != nil })?.serverId ?? 0)
                     .onAppear { Task { await loadOlder() } }
                     Color.clear.frame(height: 8)
                 }
@@ -445,7 +449,7 @@ struct ChatView: View {
 
     @ViewBuilder
     func bubble(_ m: Msg, tail: Bool, showStatus: Bool) -> some View {
-        VStack(alignment: .trailing, spacing: 4) {
+        VStack(alignment: m.mine ? .trailing : .leading, spacing: 4) {
             HStack {
                 if m.mine { Spacer(minLength: 60) }
                 if let video = m.video {
@@ -714,6 +718,12 @@ struct ChatView: View {
               let i = messages.firstIndex(where: { $0.id == id }) else { return }
         if let n = info["serverId"] as? Int {
             seen.insert(String(n))   // don't add it again when y99 echoes it back
+            // A refresh already brought y99's copy (it landed before the outbox heard back): keep just that one.
+            if messages.contains(where: { $0.id == String(n) }) {
+                messages.remove(at: i)
+                if n > lastId { lastId = n }
+                return
+            }
             messages[i].serverId = n
             messages[i].pending = nil
             if n > lastId { lastId = n }
@@ -756,17 +766,24 @@ extension ChatView {
     }
 
     // From Files: copy it out first (it's only lent to us, and video prep moves/deletes what it's given).
+    // Read/copied off the main thread (a long video can take seconds), and handed back as soon as that's done.
     func sendFile(_ url: URL) async {
-        let lent = url.startAccessingSecurityScopedResource()
-        defer { if lent { url.stopAccessingSecurityScopedResource() } }
-        if UTType(filenameExtension: url.pathExtension.lowercased())?.conforms(to: .image) == true {
-            if let data = try? Data(contentsOf: url) { await sendImage(data) }
-            return
+        enum Picked { case image(Data), video(URL) }
+        let picked: Picked? = await Task.detached {
+            let lent = url.startAccessingSecurityScopedResource()
+            defer { if lent { url.stopAccessingSecurityScopedResource() } }
+            if UTType(filenameExtension: url.pathExtension.lowercased())?.conforms(to: .image) == true {
+                return (try? Data(contentsOf: url)).map { .image($0) }
+            }
+            let copy = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+                .appendingPathExtension(url.pathExtension.isEmpty ? "mov" : url.pathExtension)
+            return (try? FileManager.default.copyItem(at: url, to: copy)) != nil ? .video(copy) : nil
+        }.value
+        switch picked {
+        case .image(let data): await sendImage(data)
+        case .video(let copy): await sendVideo(copy)
+        case nil: break
         }
-        let copy = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-            .appendingPathExtension(url.pathExtension.isEmpty ? "mov" : url.pathExtension)
-        guard (try? FileManager.default.copyItem(at: url, to: copy)) != nil else { return }
-        await sendVideo(copy)
     }
 
     // Camera: save the shot to the library, then send it straight away.
