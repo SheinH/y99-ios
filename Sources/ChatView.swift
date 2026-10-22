@@ -233,15 +233,13 @@ struct ChatView: View {
         deliveredId = max(deliveredId, n)
     }
 
-    /// A "typing" shows for at most 10 s unless it's repeated. A "stopped" hides it only after a few quiet
-    /// seconds (they pause mid-sentence, and an on/off/on bubble looks broken); their message hides it at once.
-    func setPartnerTyping(_ on: Bool, now: Bool = false) {
+    /// Like the web, a "typing" shows for at most 10 s unless it's repeated; "stopped" or a message ends it.
+    func setPartnerTyping(_ on: Bool) {
         partnerTypingEnds?.cancel()
-        if on { partnerTyping = true }
-        if now { partnerTyping = false; return }
-        guard partnerTyping else { return }
+        partnerTyping = on
+        guard on else { return }
         partnerTypingEnds = Task {
-            try? await Task.sleep(for: .seconds(on ? 10 : 4))
+            try? await Task.sleep(for: .seconds(10))
             if !Task.isCancelled { partnerTyping = false }
         }
     }
@@ -316,35 +314,47 @@ struct ChatView: View {
     }
 
     // Dictation: tap to talk, tap again to stop. The words land in the message as they form.
+    func micTapped() {
+        switch dictation.state {
+        case .idle:
+            dictation.onText = { draft = $0 }
+            Task { await dictation.start(after: draft) }
+        case .listening: dictation.stop()
+        case .finishing: break
+        }
+    }
+
     var showsMic: Bool { dictation.state != .idle || (canDictate && !canSend) }
 
+    // Tap: start / stop dictating. Hold while dictating: stop, and send once the last words are in.
     var micButton: some View {
-        Button {
+        Group {
             switch dictation.state {
             case .idle:
-                dictation.onText = { draft = $0 }
-                Task { await dictation.start(after: draft) }
-            case .listening: dictation.stop()
-            case .finishing: break
+                Image(systemName: "mic").font(.system(size: 18)).foregroundStyle(.secondary)
+            case .listening:
+                Image(systemName: "waveform").font(.system(size: 15, weight: .bold)).foregroundStyle(.white)
+                    .symbolEffect(.variableColor.iterative, isActive: true)
+                    .frame(width: 30, height: 30)
+                    .background(Circle().fill(.red))
+            case .finishing:
+                ProgressView()
             }
-        } label: {
-            Group {
-                switch dictation.state {
-                case .idle:
-                    Image(systemName: "mic").font(.system(size: 18)).foregroundStyle(.secondary)
-                case .listening:
-                    Image(systemName: "waveform").font(.system(size: 15, weight: .bold)).foregroundStyle(.white)
-                        .symbolEffect(.variableColor.iterative, isActive: true)
-                        .frame(width: 30, height: 30)
-                        .background(Circle().fill(.red))
-                case .finishing:
-                    ProgressView()
-                }
-            }
-            .frame(width: 30, height: 30)
+        }
+        .frame(width: 30, height: 30)
+        .contentShape(Rectangle())
+        .onTapGesture { micTapped() }
+        .onLongPressGesture(minimumDuration: 0.4) {
+            guard dictation.state == .listening else { micTapped(); return }
+            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            dictation.stop(then: { send() })
         }
         .padding(4)
+        .accessibilityElement()
+        .accessibilityAddTraits(.isButton)
         .accessibilityLabel(dictation.state == .listening ? "Stop Dictation" : "Dictate")
+        .accessibilityAction { micTapped() }
+        .accessibilityAction(named: "Stop and Send") { if dictation.state == .listening { dictation.stop(then: { send() }) } }
         .alert("Dictation", isPresented: Binding(get: { dictation.error != nil }, set: { if !$0 { dictation.error = nil } })) {
             Button("OK") {}
         } message: { Text(dictation.error ?? "") }
@@ -562,7 +572,7 @@ struct ChatView: View {
             }
             guard let text = o["message"] as? String else { continue }
             seen.insert(id)
-            if !mine && partnerTyping { setPartnerTyping(false, now: true) }
+            if !mine && partnerTyping { setPartnerTyping(false) }
             // type "image" carries the upload path in `message` (deob/app.deob.js:8427); type "attachment"
             // (message "[ATTACHMENT]") names a file on the storage server in `attachmentId` (deob ~52432).
             var image = (o["type"] as? String) == "image" ? ImageSource.remote(path: text) : nil

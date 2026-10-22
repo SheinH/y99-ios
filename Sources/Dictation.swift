@@ -67,6 +67,7 @@ enum Keychain {
     @Published var error: String?
     /// The whole message as it should read now: what was there before, then the dictation so far.
     var onText: ((String) -> Void)?
+    private var afterFinish: (() -> Void)?
 
     private static let sampleRate = 16_000.0
     private static let maxAppendBytes = 16_000          // 0.5 s per append when catching up
@@ -117,9 +118,11 @@ enum Keychain {
         }
     }
 
-    /// Stops listening; the rest of the transcript follows.
-    func stop() {
+    /// Stops listening; the rest of the transcript follows. `then` runs once it has all arrived
+    /// (not on a failure or cancel, which keep the text for you to look at).
+    func stop(then: (() -> Void)? = nil) {
         guard state == .listening else { return }
+        afterFinish = then
         stopAudio()
         stopped = true
         state = .finishing
@@ -278,7 +281,11 @@ enum Keychain {
 
     private func emit() { onText?(base + finalText + tail) }
 
-    private func finish() { close() }
+    private func finish() {
+        let then = afterFinish
+        close()
+        then?()
+    }
 
     private func fail(_ reason: String) {
         DebugLog.log("dictation: \(reason)")
@@ -288,6 +295,7 @@ enum Keychain {
     }
 
     private func close() {
+        afterFinish = nil
         timer?.cancel(); timer = nil
         if engine != nil { stopAudio() }
         task?.cancel(with: .normalClosure, reason: nil)

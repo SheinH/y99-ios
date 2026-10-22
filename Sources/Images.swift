@@ -283,27 +283,50 @@ struct ImageViewer: View {
     @State private var dragProgress: CGFloat = 0   // 0 at rest, 1 at the close distance
 
     var body: some View {
-        NavigationStack {
-            ZoomableImage(image: image,
-                          onTap: { withAnimation(.easeInOut(duration: 0.2)) { chromeHidden.toggle() } },
-                          onDrag: { dragProgress = $0 },
-                          onClose: { dismiss() })
-                .ignoresSafeArea()
-                .background(Color.black.opacity(1 - 0.85 * Double(dragProgress)).ignoresSafeArea())
-                .toolbar {
-                    ToolbarItem(placement: .topBarLeading) {
-                        Button("Done") { dismiss() }
+        ZoomableImage(image: image,
+                      onTap: { withAnimation(.easeInOut(duration: 0.2)) { chromeHidden.toggle() } },
+                      onDrag: { p in
+                          // Buttons fade when the drag starts or ends; the backdrop just follows the finger.
+                          if (p > 0) != (dragProgress > 0) { withAnimation(.easeInOut(duration: 0.15)) { dragProgress = p } }
+                          else { dragProgress = p }
+                      },
+                      onClose: { dismiss() })
+            .ignoresSafeArea()
+            .background(Color.black.opacity(1 - 0.85 * Double(dragProgress)).ignoresSafeArea())
+            // Plain buttons over the picture that fade, not a navigation bar that slides away.
+            .overlay(alignment: .top) {
+                HStack {
+                    Button("Done") { dismiss() }
+                        .buttonStyle(.glassIfAvailable)
+                    Spacer()
+                    ShareLink(item: Image(uiImage: image), preview: SharePreview("Photo", image: Image(uiImage: image))) {
+                        Image(systemName: "square.and.arrow.up")
                     }
-                    ToolbarItem(placement: .topBarTrailing) {
-                        ShareLink(item: Image(uiImage: image), preview: SharePreview("Photo", image: Image(uiImage: image)))
-                    }
+                    .buttonStyle(.glassIfAvailable)
                 }
-                .toolbar(chromeHidden || dragProgress > 0 ? .hidden : .visible, for: .navigationBar)
-                .statusBarHidden(chromeHidden)
+                .padding(.horizontal, 16)
+                .opacity(chromeHidden || dragProgress > 0 ? 0 : 1)
+                .allowsHitTesting(!(chromeHidden || dragProgress > 0))
+            }
+            .statusBarHidden(chromeHidden)
+            .environment(\.colorScheme, .dark)
+            .presentationBackground(.clear)   // the chat shows through as the black fades while dragging
+            .interactiveDismissDisabled()   // also stops the zoom transition's own drag
+    }
+}
+
+extension PrimitiveButtonStyle where Self == GlassIfAvailableStyle {
+    static var glassIfAvailable: GlassIfAvailableStyle { GlassIfAvailableStyle() }
+}
+
+/// Liquid Glass buttons on iOS 26, bordered ones before.
+struct GlassIfAvailableStyle: PrimitiveButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        if #available(iOS 26, *) {
+            Button(configuration).buttonStyle(.glass)
+        } else {
+            Button(configuration).buttonStyle(.bordered)
         }
-        .environment(\.colorScheme, .dark)
-        .presentationBackground(.clear)   // the chat shows through as the black fades while dragging
-        .interactiveDismissDisabled()   // also stops the zoom transition's own drag
     }
 }
 
@@ -353,7 +376,13 @@ struct ZoomableImage: UIViewRepresentable {
 
         override func layoutSubviews() {
             super.layoutSubviews()
-            if zoomScale == 1 { imageView.frame = bounds; contentSize = bounds.size }
+            // bounds + center, not frame: frame is undefined while the close drag has the view transformed,
+            // and setting it then threw the picture to the top of the screen as it closed.
+            if zoomScale == 1 {
+                imageView.bounds = CGRect(origin: .zero, size: bounds.size)
+                imageView.center = CGPoint(x: bounds.width / 2, y: bounds.height / 2)
+                contentSize = bounds.size
+            }
         }
 
         func viewForZooming(in scrollView: UIScrollView) -> UIView? { imageView }
