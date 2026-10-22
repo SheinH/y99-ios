@@ -13,6 +13,7 @@ targets:
     platform: iOS
     sources:
       - Sources
+      - Shared
       - path: Blobs          # baked blob emoji originals, looked up as Blobs/<name>.webp (local only;
         type: folder         # without it the app downloads them from y99)
         optional: true
@@ -25,8 +26,13 @@ targets:
           - CFBundleURLName: com.sanhtike.y99mvp
             CFBundleURLSchemes: [y99]
         BGTaskSchedulerPermittedIdentifiers: [com.sanhtike.y99mvp.refresh]
+    entitlements:
+      path: Y99.entitlements
+      properties:
+        com.apple.security.application-groups: [group.com.sanhtike.y99mvp]
     dependencies:
       - package: SDWebImage
+      - target: Y99Widget
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.sanhtike.y99mvp
@@ -46,3 +52,29 @@ targets:
         INFOPLIST_KEY_NSCameraUsageDescription: Take a photo to send in a chat.
         INFOPLIST_KEY_NSMicrophoneUsageDescription: Dictate messages; your speech is sent to the transcription service you set up.
         INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription: Save photos you take to your library.
+  # Home Screen chat widget (Widget/); shares Shared/ and the App Group with the app.
+  Y99Widget:
+    type: app-extension
+    platform: iOS
+    sources:
+      - Widget
+      - Shared
+    info:
+      path: Widget/Info.plist
+      properties:
+        CFBundleDisplayName: Y99
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    entitlements:
+      path: Widget/Y99Widget.entitlements
+      properties:
+        com.apple.security.application-groups: [group.com.sanhtike.y99mvp]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.sanhtike.y99mvp.widget
+        DEVELOPMENT_TEAM: JYM2RUS977
+        CODE_SIGN_STYLE: Automatic
+        TARGETED_DEVICE_FAMILY: "1"
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SKIP_INSTALL: YES

@@ -3,6 +3,7 @@ import SwiftUI
 struct Friend: Identifiable {
     let username: String
     let status: Int   // 1 online, 2 recently online, 3 offline (inferred from responses)
+    var thumb: String? = nil   // avatar, when the list carries it (the widget's picture)
     var id: String { username }
 
     var statusText: String {
@@ -91,6 +92,10 @@ struct FriendsView: View {
             .sheet(isPresented: $dictationSettings) { DictationSettingsView() }
             .refreshable { await load() }
             .task { await load() }
+            // A widget may have been added while the app was away: fetch its friend's high-res picture.
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+                Task { await syncWidget() }
+            }
             .onReceive(NotificationCenter.default.publisher(for: .y99CaptchaDone)) { _ in
                 Task { await load() }
             }
@@ -150,11 +155,20 @@ struct FriendsView: View {
             friends = arr.compactMap { o in
                 guard let name = o["username"] as? String else { return nil }
                 let status = (o["status"] as? Int) ?? Int(o["status"] as? String ?? "") ?? 3
-                return Friend(username: name, status: status)
+                let thumb = (o["thumb"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+                return Friend(username: name, status: status, thumb: thumb)
             }
         } else {
             friends = []
         }
         Store.current?.saveFriends(friends.map { ($0.username, $0.status) })
+        await syncWidget()
+    }
+
+    func syncWidget() async {
+        var thumbs: [String: String] = [:]
+        for f in friends { if let t = f.thumb { thumbs[f.username] = t } }
+        await WidgetSync.sync(friends: friends.map(\.username), favorites: favorites, thumbs: thumbs,
+                              auth: session.auth, me: session.username)
     }
 }
