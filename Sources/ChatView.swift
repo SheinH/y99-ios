@@ -68,6 +68,7 @@ struct ChatView: View {
                         let startsRun = i == 0 || messages[i - 1].mine != m.mine
                         let endsRun = i == messages.count - 1 || messages[i + 1].mine != m.mine
                         bubble(m, tail: endsRun, showStatus: i == lastMine)
+                            .shiftProbe("row \(m.id) \(m.video != nil ? "video" : m.image != nil ? "image" : String(m.text.prefix(20)))")
                             .padding(.top, startsRun ? 10 : 2)
                             .flipped()
                     }
@@ -79,10 +80,12 @@ struct ChatView: View {
                     .onAppear { Task { await loadOlder() } }
                 }
                 .scrollTargetLayout()
+                .shiftProbe("stack")
                 .padding(.horizontal, 16)
                 .padding(.vertical, 8)
             }
             .scrollPosition($position)
+            .shiftProbe("scroll")
             .noScrollEdgeEffect()
             .flipped()
             // Rows fade out under the top bar, like Messages (stands in for the edge blur the flip loses).
@@ -95,6 +98,7 @@ struct ChatView: View {
             // An inset (rather than a stacked view) so rows pass behind the glass composer.
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 bottomBar
+                    .shiftProbe("bottomBar")
                     // Remember the real keyboard's height so the emoji panel matches it.
                     .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { note in
                         if !showingEmoji, let f = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect, f.height > 100 {
@@ -675,6 +679,7 @@ struct ChatView: View {
 
     func sendText(_ text: String, typingSeconds seconds: Double = 0) {
         guard !text.isEmpty else { return }
+        DebugLog.log("send \(text.count) chars")
         let e = Outbox.shared.addText(chat: friend, text: text, typingSeconds: seconds)
         messages.append(Msg(id: e.id, text: HTMLText.encode(text), mine: true, pending: e.state))
     }

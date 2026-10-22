@@ -74,7 +74,7 @@ enum Keychain {
     /// Inline message over the composer.
     enum Notice { case micOff, micFailed }
 
-    @Published private(set) var phase: Phase = .idle { didSet { if phase != oldValue { announce() } } }
+    @Published private(set) var phase: Phase = .idle { didSet { if phase != oldValue { announce(); DebugLog.log("dictation phase \(phase)") } } }
     @Published private(set) var preview = ""      // recording: what's been heard so far
     @Published private(set) var levels: [Float] = []
     @Published private(set) var seconds = 0.0
