@@ -63,6 +63,9 @@ struct ChatView: View {
                 .scrollTargetLayout()
                 .padding(.horizontal, 16)
                 .padding(.vertical, 8)
+                // Content is exactly the screen's width: a row that's briefly too wide (a placeholder,
+                // a long unbroken string) can't widen it and make the bottom anchor re-centre the chat sideways.
+                .containerRelativeFrame(.horizontal)
             }
             .scrollPosition($position, anchor: .bottom)
             // Bottom-anchored so the thread rides up with the keyboard and opens at the newest message.
