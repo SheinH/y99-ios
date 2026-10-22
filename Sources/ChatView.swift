@@ -32,6 +32,7 @@ struct ChatView: View {
     @StateObject private var dictation = Dictation()
     @State private var canDictate = false   // set up in the account menu > Dictation
     @ObservedObject private var connectivity = Connectivity.shared
+    @ObservedObject private var voiceSends = VoiceSends.shared
     @State private var typingMs: Double = 0      // web's lkSpent: time between edits, gaps under 5s only
     @State private var lastEdit: Date?
     @State private var pickingPhoto = false
@@ -66,6 +67,10 @@ struct ChatView: View {
                 LazyVStack(spacing: 0) {
                     Color.clear.frame(height: 8)
                     if partnerTyping { TypingBubble().padding(.top, 10).padding(.horizontal, 16).flipped().transition(.opacity) }
+                    // Recordings sent without review, still being transcribed (newest at the bottom).
+                    ForEach(voiceSends.jobs(chat: friend).reversed()) { job in
+                        voiceBubble(job).padding(.top, 10).padding(.horizontal, 16).flipped()
+                    }
                     let lastMine = messages.lastIndex(where: \.mine)
                     // Identify rows by message id, not position: history inserts shift positions, which
                     // would hand a row (and its in-flight image load) to a different message.
@@ -235,6 +240,16 @@ struct ChatView: View {
             .onReceive(NotificationCenter.default.publisher(for: .y99Outbox)) { note in
                 if let info = note.userInfo { outboxChanged(info) }
             }
+            // A recording sent without review was transcribed: its text is now an outbox message.
+            .onReceive(NotificationCenter.default.publisher(for: .y99VoiceSent)) { note in
+                guard let info = note.userInfo, info["chat"] as? String == friend,
+                      let id = info["id"] as? String, let text = info["text"] as? String,
+                      !messages.contains(where: { $0.id == id }) else { return }
+                messages.append(Msg(id: id, text: HTMLText.encode(text), mine: true, pending: .waiting))
+            }
+            .onChange(of: voiceSends.jobs(chat: friend).count) { old, new in
+                if new > old { withAnimation { position.scrollTo(edge: .top) } }
+            }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
                 guard seed.isEmpty else { return }
                 Task { await refreshLatest() }
@@ -355,7 +370,7 @@ struct ChatView: View {
                     composer
                 }
             } else {
-                VoicePanel(dictation: dictation, onSend: { sendText($0) }, onEdit: { text in
+                VoicePanel(dictation: dictation, chat: friend, onSend: { sendText($0) }, onEdit: { text in
                     draft = Dictation.join(draft, text)
                     typing = true
                 })
@@ -476,6 +491,34 @@ struct ChatView: View {
             } else if showStatus {
                 Text(status(m)).font(.caption).foregroundStyle(.secondary)
             }
+        }
+    }
+
+    /// A recording on its way to becoming a text message: its length, then Retry/Delete if that failed.
+    func voiceBubble(_ job: VoiceSends.Job) -> some View {
+        VStack(alignment: .trailing, spacing: 4) {
+            HStack {
+                Spacer(minLength: 60)
+                Label(VoicePanel.clock(job.seconds), systemImage: "waveform")
+                    .font(.body.monospacedDigit())
+                    .padding(.horizontal, 14).padding(.vertical, 8)
+                    .foregroundStyle(.white)
+                    .background(BubbleShape(mine: true, tail: true).fill(Color.accentColor.opacity(0.6)))
+            }
+            HStack(spacing: 12) {
+                switch job.problem {
+                case nil:
+                    Text("Transcribing…").foregroundStyle(.secondary)
+                case .failed?:
+                    Text("Couldn't transcribe").foregroundStyle(.red)
+                    Button("Retry") { voiceSends.retry(job.id) }
+                    Button("Delete", role: .destructive) { voiceSends.remove(job.id) }
+                case .noSpeech?:
+                    Text("No speech heard").foregroundStyle(.secondary)
+                    Button("Delete", role: .destructive) { voiceSends.remove(job.id) }
+                }
+            }
+            .font(.caption)
         }
     }
 
@@ -604,7 +647,7 @@ struct ChatView: View {
                     try? await Task.sleep(for: .seconds(2))
                     await dictation.start()
                     try? await Task.sleep(for: .seconds(length))
-                    if ProcessInfo.processInfo.arguments.contains("-autoSend") { dictation.stopAndSend { sendText($0) } } else { dictation.stop() }
+                    if ProcessInfo.processInfo.arguments.contains("-autoSend") { dictation.stopAndSend(chat: friend) } else { dictation.stop() }
                     if ProcessInfo.processInfo.arguments.contains("-autoDiscard") {
                         try? await Task.sleep(for: .seconds(4))
                         dictation.discard()

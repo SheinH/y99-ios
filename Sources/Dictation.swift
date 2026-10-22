@@ -91,15 +91,13 @@ enum Keychain {
     private var job: Task<Void, Never>?
     private var run = 0                  // bumped on discard, so late results are dropped
     private var saveOnReview: ((String) -> Void)?
-    private var sendWhenReady: ((String) -> Void)?
-
-    /// Recording ended with Send: the transcript goes out without review (unless there isn't one).
-    var sending: Bool { sendWhenReady != nil }
+    private var handoff: String?         // ended with Send: the chat it goes to, once Stop's grace period is over
     private var background: NSObjectProtocol?
 
     var canSend: Bool { phase == .review && !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
     func start() async {
+        handOff()   // the previous recording's grace period, cut short
         guard phase == .idle else { return }
         notice = nil
         #if DEBUG
@@ -143,11 +141,30 @@ enum Keychain {
         }
     }
 
-    /// Ends the recording and sends its transcript as soon as it's ready, skipping review.
-    func stopAndSend(_ send: @escaping (String) -> Void) {
+    /// Ends the recording and sends its transcript to `chat` without review. The composer comes back at
+    /// once; VoiceSends transcribes and sends it in the background.
+    func stopAndSend(chat: String) {
         guard phase == .recording else { return }
-        sendWhenReady = send
-        stop()
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        removeBackgroundObserver()
+        handoff = chat
+        phase = .idle
+        let run = self.run
+        job = Task {
+            try? await Task.sleep(for: .milliseconds(300))   // the end of the last word, as in stop()
+            guard run == self.run else { return }
+            handOff()
+        }
+    }
+
+    /// Passes a recording ended with Send (and its live session) to VoiceSends.
+    private func handOff() {
+        guard let chat = handoff else { return }
+        handoff = nil
+        mic?.stop(); mic = nil
+        VoiceSends.shared.add(chat: chat, audio: audio, live: live)
+        live = nil   // VoiceSends owns it now; reset() would cancel it
+        reset()
     }
 
     /// Transcribes the same recording again, from scratch.
@@ -176,7 +193,7 @@ enum Keychain {
     /// Leaving the chat: the transcript is saved as the draft by `save`, now or once it's ready.
     func leave(save: @escaping (String) -> Void) {
         switch phase {
-        case .idle: return
+        case .idle: handOff()   // a Send in its grace period still goes out
         case .review:
             let text = take()
             if !text.isEmpty { save(text) }
@@ -196,7 +213,7 @@ enum Keychain {
 
     private func captured(_ bytes: Data) {
         guard phase == .recording else {
-            if phase == .transcribing, mic != nil { audio.append(bytes); live?.append(bytes) }   // Stop's grace period
+            if phase == .transcribing || handoff != nil, mic != nil { audio.append(bytes); live?.append(bytes) }   // Stop's grace period
             return
         }
         audio.append(bytes)
@@ -219,19 +236,7 @@ enum Keychain {
     /// the live guesses). The live session's own transcript is the fallback if that one fails.
     private func transcribe(first session: Transcription?) async {
         let run = self.run
-        let duration = Double(audio.count) / Double(PCM.bytesPerSecond)
-        var text: String?
-        if duration < 0.3 {
-            text = ""
-        } else {
-            let full = Transcription()
-            redoing = full
-            full.append(audio)
-            async let fullText = try? full.finish(timeout: .seconds(15 + duration / 2))
-            var liveText: String?
-            if let session, session.failure == nil { liveText = try? await session.finish(timeout: .seconds(10)) }
-            text = await fullText ?? liveText
-        }
+        let text = await Self.transcribe(audio, live: session) { self.redoing = $0 }
         guard run == self.run else { return }
         live = nil; redoing = nil
         transcript = text ?? ""
@@ -241,12 +246,21 @@ enum Keychain {
             if !text.isEmpty { save(text) }
             return
         }
-        if let send = sendWhenReady, problem == nil {
-            send(take())
-            return
-        }
-        sendWhenReady = nil   // nothing to send: the problem shows in review, with Redo
         phase = .review
+    }
+
+    /// The transcript of a whole recording: nil if the service failed, "" if there was no speech.
+    /// `started` gets the new request, so it can be cancelled.
+    static func transcribe(_ audio: Data, live: Transcription?, started: (Transcription) -> Void = { _ in }) async -> String? {
+        let duration = Double(audio.count) / Double(PCM.bytesPerSecond)
+        guard duration >= 0.3 else { live?.cancel(); return "" }
+        let full = Transcription()
+        started(full)
+        full.append(audio)
+        async let fullText = try? full.finish(timeout: .seconds(15 + duration / 2))
+        var liveText: String?
+        if let live, live.failure == nil { liveText = try? await live.finish(timeout: .seconds(10)) }
+        return await fullText ?? liveText
     }
 
     private func reset() {
@@ -257,7 +271,7 @@ enum Keychain {
         redoing?.cancel(); redoing = nil
         removeBackgroundObserver()
         saveOnReview = nil
-        sendWhenReady = nil
+        handoff = nil
         audio = Data()
         preview = ""; levels = []; seconds = 0
         transcript = ""; problem = nil

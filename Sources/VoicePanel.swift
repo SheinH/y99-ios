@@ -5,6 +5,7 @@ import SwiftUI
 // with Discard, Redo, Edit (into the normal message field) and Send.
 struct VoicePanel: View {
     @ObservedObject var dictation: Dictation
+    let chat: String
     let onSend: (String) -> Void
     let onEdit: (String) -> Void
 
@@ -47,8 +48,8 @@ struct VoicePanel: View {
             HStack(spacing: 10) {
                 circleButton("trash", "Discard recording") { dictation.discard() }
                 Spacer()
-                // Feeling lucky: no review, the transcript goes out as soon as it's ready.
-                Button { dictation.stopAndSend(onSend) } label: {
+                // Feeling lucky: no review; the composer's back at once and the transcript goes out when ready.
+                Button { dictation.stopAndSend(chat: chat) } label: {
                     Image(systemName: "arrow.up")
                         .font(.system(size: 18, weight: .bold))
                         .frame(width: 34, height: 34)
@@ -80,7 +81,7 @@ struct VoicePanel: View {
                 if !ready {
                     HStack(spacing: 8) {
                         ProgressView()
-                        Text(dictation.sending ? "Sending…" : "Transcribing…").foregroundStyle(.secondary)
+                        Text("Transcribing…").foregroundStyle(.secondary)
                     }
                     .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading)
                 } else if let problem = dictation.problem {
