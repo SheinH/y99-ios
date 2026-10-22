@@ -7,6 +7,8 @@ extension Notification.Name {
     static let y99Message = Notification.Name("y99Message")
     /// The socket is (re)authenticated: anything that needs it (read receipts) can go now.
     static let y99SocketReady = Notification.Name("y99SocketReady")
+    /// Partner is typing in a DM.
+    static let y99Typing = Notification.Name("y99Typing")
 }
 
 final class SocketManager: NSObject {
@@ -126,6 +128,14 @@ final class SocketManager: NSObject {
             DispatchQueue.main.async { NotificationCenter.default.post(name: .y99SocketReady, object: nil) }
         case "message":
             NotificationCenter.default.post(name: .y99Message, object: nil, userInfo: o)
+        case "dm":
+            if let data = o["data"] as? [String: Any], (data["scope"] as? String) == "typing",
+               let hunter = o["hunter"] as? String {
+                let isTyping = (data["typing"] as? Bool) ?? false
+                DispatchQueue.main.async {
+                    NotificationCenter.default.post(name: .y99Typing, object: nil, userInfo: ["hunter": hunter, "typing": isTyping])
+                }
+            }
         case "dispatch":
             remote(o["dispatch"] as? String, o["params"])
         case "commit":

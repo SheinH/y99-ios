@@ -204,6 +204,14 @@ struct ChatView: View {
                 if let d = info["delivered"] as? Int { deliveredId = max(deliveredId, d) }
                 if let s = info["seen"] as? Int { readId = max(readId, s) }
             }
+            .onReceive(NotificationCenter.default.publisher(for: .y99Typing)) { note in
+                guard let info = note.userInfo, (info["hunter"] as? String) == friend,
+                      (info["typing"] as? Bool) == true else { return }
+                if let mine = messages.filter(\.mine).compactMap(\.serverId).max() {
+                    readId = max(readId, mine)
+                    deliveredId = max(deliveredId, mine)
+                }
+            }
     }
 
     var canSend: Bool { !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
@@ -356,16 +364,10 @@ struct ChatView: View {
     // seen/delivered flags. While my newest message isn't Read, re-read the latest page's flags.
     func watchReadReceipts() async {
         while !Task.isCancelled {
-            try? await Task.sleep(for: .seconds(10))
+            let hasUnread = messages.last(where: { $0.mine })?.serverId.map { $0 > readId } ?? false
+            try? await Task.sleep(for: .seconds(hasUnread ? 3 : 10))
             guard let mine = messages.last(where: { $0.mine })?.serverId, mine > readId else { continue }
-            let r = await API.post("private/fetch", [
-                "target": friend, "private_last": String(mine + 1), "pageUp": "1", "mode": "private",
-            ], auth: session.auth, username: session.username)
-            for o in (r as? [String: Any])?["private"] as? [[String: Any]] ?? [] where (o["hunter"] as? String) == session.username {
-                guard let n = Int("\(o["id"] ?? "")") else { continue }
-                if "\(o["seen"] ?? 0)" == "1" { readId = max(readId, n) }
-                if "\(o["delivered"] ?? 0)" == "1" { deliveredId = max(deliveredId, n) }
-            }
+            await refreshLatest()
         }
     }
 
@@ -439,11 +441,20 @@ struct ChatView: View {
         if persist && seed.isEmpty { Store.current?.save(chat: friend, arr) }
         for o in arr {
             let id = String(describing: o["id"] ?? UUID().uuidString)
+            let isMine = (o["hunter"] as? String) == session.username
             // Read/delivered flags on my messages count every time they arrive, also for messages
             // already on screen (a refresh brings updated flags for those).
-            if (o["hunter"] as? String) == session.username, let n = Int(id) {
+            if isMine, let n = Int(id) {
                 if "\(o["seen"] ?? 0)" == "1" { readId = max(readId, n) }
                 if "\(o["delivered"] ?? 0)" == "1" { deliveredId = max(deliveredId, n) }
+            } else if !isMine, let n = Int(id) {
+                // Partner sent a message (or reply) with id `n`. Any message we sent prior to `n`
+                // has definitively been seen and delivered.
+                let priorMine = messages.filter(\.mine).compactMap(\.serverId).filter { $0 < n }.max()
+                if let priorMine {
+                    readId = max(readId, priorMine)
+                    deliveredId = max(deliveredId, priorMine)
+                }
             }
             if seen.contains(id) {
                 // y99's copy of a photo we stored without an address (sent, then offline): fill it in.
@@ -501,6 +512,12 @@ struct ChatView: View {
             messages[i].serverId = n
             messages[i].pending = nil
             if n > lastId { lastId = n }
+            // If the partner has already replied with a message newer than this, mark as read
+            let laterPartner = messages.filter({ !$0.mine }).compactMap(\.serverId).filter({ $0 > n }).min()
+            if laterPartner != nil {
+                readId = max(readId, n)
+                deliveredId = max(deliveredId, n)
+            }
         } else if let raw = info["state"] as? String {
             messages[i].pending = OutboxEntry.State(rawValue: raw)
             messages[i].detail = info["detail"] as? String
