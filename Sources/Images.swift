@@ -118,9 +118,14 @@ enum ImageSource {
         URL(string: path, relativeTo: URL(string: imagePath))?.absoluteURL.standardized
     }
 
-    /// Files a photo we just sent under the server's addresses for it (the thumb path private/upload
-    /// returns, and the full-size path ChatImage derives from it), so it shows offline without a download.
-    /// y99 stores the upload as sent (minus metadata), so our copy is the same picture.
+    /// Photos we sent, by server message id, until the message comes back in the chat with its address:
+    /// private/upload only returns the id (its `thumb` is the sender's avatar), and the photo's address
+    /// is an encrypted `yimv2.php?ja=…` link that first appears in the message itself.
+    nonisolated(unsafe) static var sentAwaitingPath: [Int: Data] = [:]
+
+    /// Files a photo we sent under its server addresses (the message path and the full-size path ChatImage
+    /// derives from it), so it shows offline without a download. y99 stores the upload as sent (minus
+    /// metadata), so our copy is the same picture.
     static func cacheSent(_ data: Data, thumbPath: String) {
         var full = thumbPath
         if let r = thumbPath.range(of: "_thumb") { full.removeSubrange(r) }
