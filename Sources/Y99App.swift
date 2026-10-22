@@ -51,9 +51,6 @@ struct Y99App: App {
                         guard ProcessInfo.processInfo.arguments.contains("-autoplay") else { return }
                         try? await Task.sleep(for: .seconds(2)); VideoPlayback.present(url)
                     }
-                } else if ProcessInfo.processInfo.arguments.contains("-chatPreview") {
-                    // Layout harness: opens a chat with the keyboard up, no login needed.
-                    PreviewHarness()
                 } else if session.auth == nil {
                     LoginView()
                 } else {
@@ -125,23 +122,3 @@ struct Y99App: App {
         }
     }
 }
-
-#if DEBUG
-// Mirrors the real path: captcha sheet shown then dismissed, then a chat pushed from a list.
-struct PreviewHarness: View {
-    @State private var path: [String] = []
-    var body: some View {
-        NavigationStack(path: $path) {
-            List { NavigationLink("preview", value: "preview") }
-                .navigationDestination(for: String.self) { ChatView(friend: $0, focusOnAppear: true) }
-        }
-        .task {
-            Captcha.shared.url = URL(string: "https://example.com")
-            try? await Task.sleep(for: .seconds(2))
-            Captcha.shared.url = nil
-            try? await Task.sleep(for: .seconds(1))
-            path = ["preview"]
-        }
-    }
-}
-#endif

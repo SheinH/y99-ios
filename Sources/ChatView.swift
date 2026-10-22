@@ -19,7 +19,6 @@ struct ChatView: View {
 
     @State private var messages: [Msg] = []
     @State private var seen: Set<String> = []
-    var focusOnAppear = false
     var seed: [Msg] = []   // DEBUG harness only
     @State private var draft = ""
     @State private var typing = false   // composer has the keyboard (or the emoji panel in its place)
@@ -118,16 +117,8 @@ struct ChatView: View {
             append([o])
         }
         .task {
-            if focusOnAppear { typing = true }
             if reporter == nil { reporter = TypingReporter(target: friend) }
             #if DEBUG
-            if ProcessInfo.processInfo.arguments.contains("-swapTest") {
-                Task {
-                    try? await Task.sleep(for: .seconds(2)); typing = true
-                    try? await Task.sleep(for: .seconds(2)); showingEmoji = true
-                    try? await Task.sleep(for: .seconds(2)); showingEmoji = false
-                }
-            }
             if ProcessInfo.processInfo.arguments.contains("-focusLater") {
                 Task { try? await Task.sleep(for: .seconds(2)); typing = true }
             }
@@ -184,6 +175,7 @@ struct ChatView: View {
                 if let lastEdit, now.timeIntervalSince(lastEdit) < 5 { typingMs += now.timeIntervalSince(lastEdit) * 1000 }
                 lastEdit = draft.isEmpty ? nil : now
                 reporter?.edited(draft)
+                saveState()
             }
             .onChange(of: [readId, deliveredId, markedSeen]) { saveState() }
             .onReceive(NotificationCenter.default.publisher(for: .y99SocketReady)) { _ in markSeenIfVisible() }
@@ -194,7 +186,6 @@ struct ChatView: View {
                 guard seed.isEmpty else { return }
                 Task { await refreshLatest() }
             }
-            .onChange(of: draft) { saveState() }
             .onChange(of: lastId) { if Whatsup.shared.chat?.target == friend { Whatsup.shared.chat?.privateLast = lastId } }
             .onReceive(NotificationCenter.default.publisher(for: .y99Seen)) { note in
                 guard let info = note.userInfo, info["target"] as? String == friend else { return }
@@ -205,13 +196,16 @@ struct ChatView: View {
                 guard let info = note.userInfo, (info["hunter"] as? String) == friend else { return }
                 let on = (info["typing"] as? Bool) == true
                 setPartnerTyping(on)
-                guard on else { return }
-                // Typing means they have the chat open, so they've seen everything we sent.
-                if let mine = messages.filter(\.mine).compactMap(\.serverId).max() {
-                    readId = max(readId, mine)
-                    deliveredId = max(deliveredId, mine)
-                }
+                if on { partnerSawMine(before: .max) }   // typing here means they have the chat open
             }
+    }
+
+    /// They've read every message of mine older than `limit`: replying (or typing) implies they saw them,
+    /// even when y99's own seen flag hasn't come through.
+    func partnerSawMine(before limit: Int) {
+        guard let n = messages.filter(\.mine).compactMap(\.serverId).filter({ $0 < limit }).max() else { return }
+        readId = max(readId, n)
+        deliveredId = max(deliveredId, n)
     }
 
     /// Like the web, a "typing" shows for at most 10 s unless it's repeated; "stopped" or a message ends it.
@@ -401,10 +395,12 @@ struct ChatView: View {
         }
     }
 
+    var newestTheirs: Int { messages.filter { !$0.mine }.compactMap(\.serverId).max() ?? 0 }
+
     // Like the web, tell the sender we've read their newest message while this chat is on screen.
     func markSeenIfVisible() {
-        guard UIApplication.shared.applicationState == .active,
-              let newest = messages.filter({ !$0.mine }).compactMap(\.serverId).max() else { return }
+        guard UIApplication.shared.applicationState == .active, newestTheirs > 0 else { return }
+        let newest = newestTheirs
         guard newest > markedSeen else { DebugLog.log("seen \(friend) \(newest) skipped: already marked \(markedSeen)"); return }
         // Only counts as sent if the socket was up; otherwise .y99SocketReady brings us back here.
         if SocketManager.shared.markSeen(target: friend, msgId: newest) { markedSeen = newest }
@@ -471,21 +467,15 @@ struct ChatView: View {
         if persist && seed.isEmpty { Store.current?.save(chat: friend, arr) }
         for o in arr {
             let id = String(describing: o["id"] ?? UUID().uuidString)
-            let isMine = (o["hunter"] as? String) == session.username
+            let mine = (o["hunter"] as? String) == session.username
+            let n = Int(id)
             // Read/delivered flags on my messages count every time they arrive, also for messages
             // already on screen (a refresh brings updated flags for those).
-            if isMine, let n = Int(id) {
+            if mine, let n {
                 if "\(o["seen"] ?? 0)" == "1" { readId = max(readId, n) }
                 if "\(o["delivered"] ?? 0)" == "1" { deliveredId = max(deliveredId, n) }
-            } else if !isMine, let n = Int(id) {
-                if n > friendThumbId, let t = o["thumb"] as? String, !t.isEmpty { friendThumb = t; friendThumbId = n }
-                // Partner sent a message (or reply) with id `n`. Any message we sent prior to `n`
-                // has definitively been seen and delivered.
-                let priorMine = messages.filter(\.mine).compactMap(\.serverId).filter { $0 < n }.max()
-                if let priorMine {
-                    readId = max(readId, priorMine)
-                    deliveredId = max(deliveredId, priorMine)
-                }
+            } else if let n, n > friendThumbId, let t = o["thumb"] as? String, !t.isEmpty {
+                friendThumb = t; friendThumbId = n
             }
             if seen.contains(id) {
                 // y99's copy of a photo we stored without an address (sent, then offline): fill it in.
@@ -498,7 +488,6 @@ struct ChatView: View {
             }
             guard let text = o["message"] as? String else { continue }
             seen.insert(id)
-            let mine = (o["hunter"] as? String) == session.username
             if !mine && partnerTyping { setPartnerTyping(false) }
             // type "image" carries the upload path in `message` (deob/app.deob.js:8427); type "attachment"
             // (message "[ATTACHMENT]") names a file on the storage server in `attachmentId` (deob ~52432).
@@ -511,15 +500,13 @@ struct ChatView: View {
                 else if Attachments.isImage(aid), let u = Attachments.url(for: aid) { image = .remote(path: u.absoluteString) }
                 else { shown = "Attachment" }
             }
-            let n = Int(id)
             // History arrives newest-first, so insert by server id rather than appending.
             // Local messages still waiting on the server (serverId nil) stay at the end.
             let at = n.flatMap { n in messages.firstIndex { ($0.serverId ?? .max) > n } } ?? messages.endIndex
             messages.insert(Msg(id: id, text: shown, mine: mine, image: image, video: video, serverId: n), at: at)
-            if let n {
-                if n > lastId { lastId = n }
-            }
+            if let n, n > lastId { lastId = n }
         }
+        partnerSawMine(before: newestTheirs)
         markSeenIfVisible()
     }
 
@@ -544,12 +531,7 @@ struct ChatView: View {
             messages[i].serverId = n
             messages[i].pending = nil
             if n > lastId { lastId = n }
-            // If the partner has already replied with a message newer than this, mark as read
-            let laterPartner = messages.filter({ !$0.mine }).compactMap(\.serverId).filter({ $0 > n }).min()
-            if laterPartner != nil {
-                readId = max(readId, n)
-                deliveredId = max(deliveredId, n)
-            }
+            partnerSawMine(before: newestTheirs)   // they may have replied before this send was confirmed
         } else if let raw = info["state"] as? String {
             messages[i].pending = OutboxEntry.State(rawValue: raw)
             messages[i].detail = info["detail"] as? String
