@@ -159,14 +159,17 @@ struct ChatImage: View {
                     .frame(width: fitted(image.size).width, height: fitted(image.size).height)
                     .contentShape(Rectangle())
                     .onTapGesture { viewing = true }
+            } else if expired {
+                // Gone for good: a quiet note, not a placeholder box for a picture that will never come.
+                Label("Photo expired", systemImage: "photo")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .padding(.vertical, 4)
             } else {
                 Color(.systemGray5)
                     .frame(width: 200, height: 150)
                     .overlay {
-                        if expired {
-                            Label("Photo expired", systemImage: "clock.badge.xmark")
-                                .font(.subheadline).foregroundStyle(.secondary)
-                        } else if failed {
+                        if failed {
                             Image(systemName: "photo.badge.exclamationmark").font(.title2).foregroundStyle(.secondary)
                         } else {
                             ProgressView()
