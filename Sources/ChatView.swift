@@ -46,6 +46,9 @@ struct ChatView: View {
     @State private var friendThumbId = 0
     @State private var avatarImage: UIImage?     // full size, once fetched
     @State private var viewingAvatar = false
+    @State private var reporter: TypingReporter?   // our typing -> partner
+    @State private var partnerTyping = false
+    @State private var partnerTypingEnds: Task<Void, Never>?
 
     var body: some View {
         observers(chat)
@@ -70,6 +73,7 @@ struct ChatView: View {
                         bubble(m, tail: endsRun, showStatus: i == lastMine)
                             .padding(.top, startsRun ? 10 : 2)
                     }
+                    if partnerTyping { TypingBubble().padding(.top, 10) }
                 }
                 .scrollTargetLayout()
                 .padding(.horizontal, 16)
@@ -144,6 +148,7 @@ struct ChatView: View {
         }
         .task {
             if focusOnAppear { typing = true }
+            if reporter == nil { reporter = TypingReporter(target: friend) }
             #if DEBUG
             if ProcessInfo.processInfo.arguments.contains("-swapTest") {
                 Task {
@@ -195,6 +200,7 @@ struct ChatView: View {
         .onAppear { Notifier.shared.activeChat = friend }
         .onDisappear {
             if Notifier.shared.activeChat == friend { Notifier.shared.activeChat = nil }
+            reporter?.stop()
             if Whatsup.shared.chat?.target == friend { Whatsup.shared.chat = nil }
         }
     }
@@ -206,6 +212,7 @@ struct ChatView: View {
                 let now = Date()
                 if let lastEdit, now.timeIntervalSince(lastEdit) < 5 { typingMs += now.timeIntervalSince(lastEdit) * 1000 }
                 lastEdit = draft.isEmpty ? nil : now
+                reporter?.edited(draft)
             }
             .onChange(of: [readId, deliveredId, markedSeen]) { saveState() }
             .onReceive(NotificationCenter.default.publisher(for: .y99SocketReady)) { _ in markSeenIfVisible() }
@@ -224,13 +231,27 @@ struct ChatView: View {
                 if let s = info["seen"] as? Int { readId = max(readId, s) }
             }
             .onReceive(NotificationCenter.default.publisher(for: .y99Typing)) { note in
-                guard let info = note.userInfo, (info["hunter"] as? String) == friend,
-                      (info["typing"] as? Bool) == true else { return }
+                guard let info = note.userInfo, (info["hunter"] as? String) == friend else { return }
+                let on = (info["typing"] as? Bool) == true
+                setPartnerTyping(on)
+                guard on else { return }
+                // Typing means they have the chat open, so they've seen everything we sent.
                 if let mine = messages.filter(\.mine).compactMap(\.serverId).max() {
                     readId = max(readId, mine)
                     deliveredId = max(deliveredId, mine)
                 }
             }
+    }
+
+    /// Like the web, a "typing" shows for at most 10 s unless it's repeated; "stopped" or a message ends it.
+    func setPartnerTyping(_ on: Bool) {
+        partnerTypingEnds?.cancel()
+        partnerTyping = on
+        guard on else { return }
+        partnerTypingEnds = Task {
+            try? await Task.sleep(for: .seconds(10))
+            if !Task.isCancelled { partnerTyping = false }
+        }
     }
 
     // Tap opens the full-size picture (fetched once per picture, then cached).
@@ -507,6 +528,7 @@ struct ChatView: View {
             guard let text = o["message"] as? String else { continue }
             seen.insert(id)
             let mine = (o["hunter"] as? String) == session.username
+            if !mine && partnerTyping { setPartnerTyping(false) }
             // type "image" carries the upload path in `message` (deob/app.deob.js:8427); type "attachment"
             // (message "[ATTACHMENT]") names a file on the storage server in `attachmentId` (deob ~52432).
             var image = (o["type"] as? String) == "image" ? ImageSource.remote(path: text) : nil

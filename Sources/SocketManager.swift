@@ -66,6 +66,12 @@ final class SocketManager: NSObject {
         return true
     }
 
+    /// Typing indicator for a DM partner (the web's private/typing2). Only goes out on a live socket.
+    func sendTyping(target: String, typing: Bool) {
+        guard isConnected else { return }
+        send(["cmd": "dm", "target": target, "data": ["scope": "typing", "typing": typing], "token": Double.random(in: 0..<1)])
+    }
+
     private func connect() {
         guard running, let url = URL(string: "wss://api1.y99.in:8443") else { return }
         DebugLog.log("socket connecting")

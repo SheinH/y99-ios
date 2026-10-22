@@ -20,6 +20,8 @@ extension Notification.Name {
     }
     /// The open chat; its messages come back in `private`.
     var chat: Chat?
+    /// Who we're typing to right now (TypingReporter); whatsup carries it too, like the web.
+    var typingTarget: String?
 
     private var auth: String?
     private var username = ""
@@ -54,6 +56,7 @@ extension Notification.Name {
         stop()
         auth = nil
         chat = nil
+        typingTarget = nil
         messagesHash = nil
         newMessagesT = nil
         haw = nil
@@ -94,6 +97,10 @@ extension Notification.Name {
         if let chat {
             f["target"] = chat.target
             f["private_last"] = String(chat.privateLast)
+        }
+        if let typingTarget {
+            f["typing"] = "true"
+            f["typingTarget"] = typingTarget
         }
         f.merge(extra) { _, new in new }
 
