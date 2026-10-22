@@ -611,10 +611,7 @@ extension View {
 struct TopFade: View {
     var body: some View {
         GeometryReader { g in
-            ZStack {
-                Rectangle().fill(.ultraThinMaterial)
-                Color(.systemBackground).opacity(0.7)
-            }
+            Color(.systemBackground)
             .mask(LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: 0.5),
                                          .init(color: .clear, location: 1)], startPoint: .top, endPoint: .bottom))
             .frame(height: g.safeAreaInsets.top + 24)
