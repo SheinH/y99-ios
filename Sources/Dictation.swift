@@ -91,6 +91,10 @@ enum Keychain {
     private var job: Task<Void, Never>?
     private var run = 0                  // bumped on discard, so late results are dropped
     private var saveOnReview: ((String) -> Void)?
+    private var sendWhenReady: ((String) -> Void)?
+
+    /// Recording ended with Send: the transcript goes out without review (unless there isn't one).
+    var sending: Bool { sendWhenReady != nil }
     private var background: NSObjectProtocol?
 
     var canSend: Bool { phase == .review && !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
@@ -137,6 +141,13 @@ enum Keychain {
             mic?.stop(); mic = nil
             await transcribe(first: live)
         }
+    }
+
+    /// Ends the recording and sends its transcript as soon as it's ready, skipping review.
+    func stopAndSend(_ send: @escaping (String) -> Void) {
+        guard phase == .recording else { return }
+        sendWhenReady = send
+        stop()
     }
 
     /// Transcribes the same recording again, from scratch.
@@ -230,6 +241,11 @@ enum Keychain {
             if !text.isEmpty { save(text) }
             return
         }
+        if let send = sendWhenReady, problem == nil {
+            send(take())
+            return
+        }
+        sendWhenReady = nil   // nothing to send: the problem shows in review, with Redo
         phase = .review
     }
 
@@ -241,6 +257,7 @@ enum Keychain {
         redoing?.cancel(); redoing = nil
         removeBackgroundObserver()
         saveOnReview = nil
+        sendWhenReady = nil
         audio = Data()
         preview = ""; levels = []; seconds = 0
         transcript = ""; problem = nil

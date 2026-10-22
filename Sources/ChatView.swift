@@ -582,7 +582,7 @@ struct ChatView: View {
                     try? await Task.sleep(for: .seconds(2))
                     await dictation.start()
                     try? await Task.sleep(for: .seconds(length))
-                    dictation.stop()
+                    if ProcessInfo.processInfo.arguments.contains("-autoSend") { dictation.stopAndSend { sendText($0) } } else { dictation.stop() }
                     if ProcessInfo.processInfo.arguments.contains("-autoDiscard") {
                         try? await Task.sleep(for: .seconds(4))
                         dictation.discard()

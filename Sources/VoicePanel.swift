@@ -28,32 +28,43 @@ struct VoicePanel: View {
                 .padding(.horizontal, 16).padding(.vertical, 10)
                 .glass(in: RoundedRectangle(cornerRadius: 20, style: .continuous))
                 .accessibilityLabel(dictation.preview.isEmpty ? "Listening" : "Hearing: \(dictation.preview)")
-            HStack(spacing: 10) {
+            HStack(spacing: 8) {
                 circleButton("trash", "Discard recording") { dictation.discard() }
-                HStack(spacing: 10) {
+                HStack(spacing: 8) {
                     Image(systemName: "circle.fill")
                         .font(.system(size: 9))
                         .foregroundStyle(.red)
                         .symbolEffect(.pulse, options: .repeating)
                     Text(Self.clock(dictation.seconds))
                         .font(.body.monospacedDigit())
+                        .fixedSize()
                     LevelMeter(levels: dictation.levels)
                         .frame(height: 26)
                 }
-                .padding(.horizontal, 16)
+                .padding(.horizontal, 14)
                 .frame(maxWidth: .infinity, minHeight: 48)
                 .glass(in: Capsule())
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("Recording, \(Self.clock(dictation.seconds))")
-                Button { dictation.stop() } label: {
-                    Image(systemName: "stop.fill")
-                        .font(.system(size: 20))
+                // Feeling lucky: no review, the transcript goes out as soon as it's ready.
+                Button { dictation.stopAndSend(onSend) } label: {
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: 18, weight: .bold))
                         .frame(width: 34, height: 34)
                 }
                 .buttonStyle(.glassProminentIfAvailable)
                 .buttonBorderShape(.circle)
                 .controlSize(.large)
-                .tint(.red)
+                .accessibilityLabel("Send without review")
+                Button { dictation.stop() } label: {
+                    Image(systemName: "stop.fill")
+                        .font(.system(size: 18))
+                        .foregroundStyle(.red)
+                        .frame(width: 34, height: 34)
+                }
+                .buttonStyle(.glassIfAvailable)
+                .buttonBorderShape(.circle)
+                .controlSize(.large)
                 .accessibilityLabel("Stop and review")
             }
         }
@@ -68,7 +79,7 @@ struct VoicePanel: View {
                 if !ready {
                     HStack(spacing: 8) {
                         ProgressView()
-                        Text("Transcribing…").foregroundStyle(.secondary)
+                        Text(dictation.sending ? "Sending…" : "Transcribing…").foregroundStyle(.secondary)
                     }
                     .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading)
                 } else if let problem = dictation.problem {
