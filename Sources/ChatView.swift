@@ -300,12 +300,13 @@ struct ChatView: View {
                 }
             }
             field
-            if canDictate { micButton }
         }
         .padding(.horizontal, 16).padding(.vertical, 8)
     }
 
     // Dictation: tap to talk, tap again to stop. The words land in the message as they form.
+    var showsMic: Bool { dictation.state != .idle || (canDictate && !canSend) }
+
     var micButton: some View {
         Button {
             switch dictation.state {
@@ -318,17 +319,20 @@ struct ChatView: View {
         } label: {
             Group {
                 switch dictation.state {
-                case .idle: Image(systemName: "mic").foregroundStyle(.primary)
+                case .idle:
+                    Image(systemName: "mic").font(.system(size: 18)).foregroundStyle(.secondary)
                 case .listening:
-                    Image(systemName: "waveform").foregroundStyle(.red)
+                    Image(systemName: "waveform").font(.system(size: 15, weight: .bold)).foregroundStyle(.white)
                         .symbolEffect(.variableColor.iterative, isActive: true)
-                case .finishing: ProgressView()
+                        .frame(width: 30, height: 30)
+                        .background(Circle().fill(.red))
+                case .finishing:
+                    ProgressView()
                 }
             }
-            .font(.system(size: 17, weight: .medium))
-            .frame(width: 38, height: 38)
-            .glass(in: Circle())
+            .frame(width: 30, height: 30)
         }
+        .padding(4)
         .accessibilityLabel(dictation.state == .listening ? "Stop Dictation" : "Dictate")
         .alert("Dictation", isPresented: Binding(get: { dictation.error != nil }, set: { if !$0 { dictation.error = nil } })) {
             Button("OK") {}
@@ -357,9 +361,12 @@ struct ChatView: View {
                     .frame(width: 30, height: 30)
             }
             .padding(.vertical, 4)
-            .padding(.trailing, canSend ? 0 : 6)
+            .padding(.trailing, showsMic || canSend ? 0 : 6)
             .accessibilityLabel(showingEmoji ? "Keyboard" : "Emoji")
-            if canSend {
+            // One trailing slot, like iMessage: the mic while empty (or dictating), the send arrow once there's text.
+            if showsMic {
+                micButton
+            } else if canSend {
                 Button(action: send) {
                     Image(systemName: "arrow.up")
                         .font(.system(size: 15, weight: .bold))
