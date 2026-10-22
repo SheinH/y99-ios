@@ -26,7 +26,8 @@ extension Notification.Name {
 
     private init() {
         monitor.pathUpdateHandler = { path in
-            Task { @MainActor in Connectivity.shared.update { $0.path(up: path.status == .satisfied) } }
+            let up = path.status == .satisfied, wifi = path.usesInterfaceType(.wifi)
+            Task { @MainActor in Connectivity.shared.update { $0.path(up: up, wifi: wifi) } }
         }
         monitor.start(queue: DispatchQueue(label: "y99.path"))
         pinger.onResult = { seq, rtt in

@@ -13,8 +13,9 @@ import Foundation
 //   3. Reply in <= 0.5 s                       -> online.   Reply in 0.5 ... 1 s -> slow.
 //   4. Failure                                 -> slow (a lost ping is a bad connection, not none),
 //      3 failures in a row, and y99 silent for 3 s -> offline.
-//   5. y99 answered                            -> the failure run ends; offline -> online. (Networks
-//      that drop ping stay usable this way.)
+//   5. y99 answered                            -> the failure run ends; offline -> online. (Wi-Fi
+//      networks that drop ping stay usable this way.) Wi-Fi only: off Wi-Fi (cellular) ping isn't
+//      blocked, so pings alone decide and y99's answers don't count.
 //   6. Network back                            -> still offline until a reply or y99 answers.
 struct LinkState: Equatable {
     enum Status: Equatable { case online, slow, offline }
@@ -29,6 +30,7 @@ struct LinkState: Equatable {
     private var newestSeq = -1
     private var pathUp = true
     private var lastServerAnswer = Date.distantPast
+    private var trustPing = false   // true off Wi-Fi: pings alone decide
 
     mutating func ping(seq: Int, rtt: TimeInterval?, now: Date = Date()) {
         guard seq > newestSeq else { return }   // rule 1
@@ -39,7 +41,7 @@ struct LinkState: Equatable {
             status = rtt > Self.slowOver ? .slow : .online
         } else {
             failures += 1
-            let serverQuiet = now.timeIntervalSince(lastServerAnswer) > Self.serverGrace
+            let serverQuiet = trustPing || now.timeIntervalSince(lastServerAnswer) > Self.serverGrace
             if failures >= Self.failuresForOffline && serverQuiet { status = .offline }
             else if status != .offline { status = .slow }
         }
@@ -47,12 +49,13 @@ struct LinkState: Equatable {
 
     mutating func serverAnswered(now: Date = Date()) {
         lastServerAnswer = now
-        guard pathUp else { return }
+        guard pathUp, !trustPing else { return }
         failures = 0
         if status == .offline { status = .online }
     }
 
-    mutating func path(up: Bool) {
+    mutating func path(up: Bool, wifi: Bool = true) {
+        trustPing = !wifi
         guard up != pathUp else { return }
         pathUp = up
         if !up {
