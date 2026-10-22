@@ -214,6 +214,8 @@ struct ChatVideo: View {
     @State private var poster: UIImage?
     @State private var duration: Double?
     @State private var failed = false
+    @State private var playing: Playing?
+    private struct Playing: Identifiable { let id = UUID(); let file: URL }
 
     private static let maxSize = CGSize(width: 240, height: 320)
 
@@ -248,7 +250,8 @@ struct ChatVideo: View {
         }
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .contentShape(Rectangle())
-        .onTapGesture { if let file { VideoPlayback.present(file) } }
+        .onTapGesture { if let file { playing = Playing(file: file) } }
+        .fullScreenCover(item: $playing) { VideoViewer(file: $0.file) }
         .accessibilityLabel("Video")
         .accessibilityAddTraits(.isButton)
         .task(id: id) { await load() }
@@ -272,7 +275,20 @@ struct ChatVideo: View {
         // No poster or length for formats iOS's video framework can't read (WebM); they still play.
         poster = await VideoPrep.poster(file)
         duration = await VideoPrep.duration(file)
+        #if DEBUG
+        // -autoplay: open the player once loaded; -autoclose: close it 3 s later.
+        let args = ProcessInfo.processInfo.arguments
+        if args.contains("-autoplay"), !Self.autoplayed {
+            Self.autoplayed = true
+            playing = Playing(file: file)
+            if args.contains("-autoclose") { try? await Task.sleep(for: .seconds(3)); playing = nil }
+        }
+        #endif
     }
+
+    #if DEBUG
+    private static var autoplayed = false
+    #endif
 
     private static func clock(_ s: Double) -> String {
         let t = Int(s.rounded())
@@ -280,116 +296,79 @@ struct ChatVideo: View {
     }
 }
 
-// Full-screen playback, presented the UIKit way so the player's own close button works. iOS's video
-// framework (AVPlayer, also what Files uses) can't read WebM, but Safari's engine can (VP8/VP9 + Opus),
-// so those play in a web view instead.
-enum VideoPlayback {
-    @MainActor static func present(_ url: URL) {
-        try? AVAudioSession.sharedInstance().setCategory(.playback)   // play sound even in silent mode
-        Task { @MainActor in
-            let native = (try? await AVURLAsset(url: url).load(.isPlayable)) ?? false
-            let vc: UIViewController
-            if native {
-                let p = AVPlayerViewController()
-                p.player = AVPlayer(url: url)
-                vc = p
-            } else {
-                vc = WebVideoController(file: url)
+// Full-screen video: a plain SwiftUI cover (ChatVideo presents it) with the system player and a close
+// button above the picture. iOS's video framework can't read WebM, but Safari's engine can (VP8/VP9 +
+// Opus), so those play in a web view in the same place.
+struct VideoViewer: View {
+    let file: URL
+    @Environment(\.dismiss) private var dismiss
+    @State private var player: AVPlayer?
+    @State private var useWeb = false
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Spacer()
+                Button { dismiss() } label: { Image(systemName: "xmark").frame(width: 24, height: 24) }
+                    .buttonStyle(.glassIfAvailable)
+                    .buttonBorderShape(.circle)
+                    .accessibilityLabel("Close")
             }
-            vc.modalPresentationStyle = .fullScreen
-            PlayerWindow.present(vc) { (vc as? AVPlayerViewController)?.player?.play() }
+            .padding(.horizontal, 16).padding(.bottom, 8)
+            if let player {
+                VideoPlayer(player: player)
+            } else if useWeb {
+                WebVideo(file: file)
+            } else {
+                Color.black
+            }
         }
+        .background(Color.black.ignoresSafeArea())
+        .environment(\.colorScheme, .dark)
+        .task {
+            if (try? await AVURLAsset(url: file).load(.isPlayable)) == true {
+                try? AVAudioSession.sharedInstance().setCategory(.playback)   // sound even in silent mode
+                let p = AVPlayer(url: file)
+                player = p
+                p.play()
+            } else {
+                useWeb = true
+            }
+        }
+        .onDisappear { player?.pause() }
     }
 }
 
-/// Shows the player in a window of its own above the app, removed once the player closes. Presented
-/// over the app's own root instead, closing it (the player's swipe-down especially) left the chat
-/// screen's layout off, so the thread jumped sideways on later layout changes.
-@MainActor enum PlayerWindow {
-    private static var window: UIWindow?
+/// WebKit's own player for a local file (WebM).
+struct WebVideo: UIViewRepresentable {
+    let file: URL
 
-    static func present(_ vc: UIViewController, completion: @escaping () -> Void) {
-        guard window == nil, let scene = UIApplication.shared.connectedScenes
-            .compactMap({ $0 as? UIWindowScene }).first(where: { $0.activationState == .foregroundActive })
-            ?? UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first else { return }
-        let appWindow = scene.keyWindow
-        let host = Host()
-        let w = UIWindow(windowScene: scene)
-        w.windowLevel = .normal + 1
-        w.backgroundColor = .clear
-        w.rootViewController = host
-        host.onPlayerClosed = {
-            w.isHidden = true
-            window = nil
-            appWindow?.makeKey()
-        }
-        window = w
-        w.makeKeyAndVisible()
-        host.present(vc, animated: true) { host.showing = true; completion() }
-    }
-
-    private final class Host: UIViewController {
-        var showing = false
-        var onPlayerClosed: (() -> Void)?
-        override func viewDidLoad() { super.viewDidLoad(); view.backgroundColor = .clear }
-        override func viewDidAppear(_ animated: Bool) {
-            super.viewDidAppear(animated)
-            if showing && presentedViewController == nil { onPlayerClosed?(); onPlayerClosed = nil }
-        }
-    }
-}
-
-/// Plays a local video file with WebKit's own player (for WebM), with a close button.
-final class WebVideoController: UIViewController {
-    private let file: URL
-    private var web: WKWebView!
-
-    init(file: URL) { self.file = file; super.init(nibName: nil, bundle: nil) }
-    required init?(coder: NSCoder) { fatalError() }
-
-    override func viewDidLoad() {
-        super.viewDidLoad()
-        view.backgroundColor = .black
+    func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
         config.allowsInlineMediaPlayback = true
         config.mediaTypesRequiringUserActionForPlayback = []
-        web = WKWebView(frame: view.bounds, configuration: config)
-        web.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        let web = WKWebView(frame: .zero, configuration: config)
         web.isOpaque = false
         web.backgroundColor = .black
         web.scrollView.isScrollEnabled = false
-        view.addSubview(web)
-
         // The page sits next to the video so the web view may read both.
         let dir = file.deletingLastPathComponent()
         let page = dir.appendingPathComponent("player-\(UUID().uuidString).html")
         let src = file.lastPathComponent.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? file.lastPathComponent
         let html = """
         <!doctype html><meta name="viewport" content="width=device-width, initial-scale=1">
-        <style>html,body{margin:0;height:100%;background:#000}video{position:absolute;top:56px;left:0;width:100%;height:calc(100% - 56px);object-fit:contain}</style>
+        <style>html,body{margin:0;height:100%;background:#000}video{width:100%;height:100%;object-fit:contain}</style>
         <video src="\(src)" controls autoplay playsinline></video>
         """
         try? html.write(to: page, atomically: true, encoding: .utf8)
         web.loadFileURL(page, allowingReadAccessTo: dir)
         DispatchQueue.main.asyncAfter(deadline: .now() + 5) { try? FileManager.default.removeItem(at: page) }
-
-        let close = UIButton(type: .system, primaryAction: UIAction { [weak self] _ in self?.dismiss(animated: true) })
-        close.setImage(UIImage(systemName: "xmark", withConfiguration: UIImage.SymbolConfiguration(pointSize: 17, weight: .semibold)), for: .normal)
-        close.tintColor = .white
-        close.backgroundColor = UIColor.black.withAlphaComponent(0.5)
-        close.layer.cornerRadius = 20
-        close.accessibilityLabel = "Close"
-        close.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(close)
-        NSLayoutConstraint.activate([
-            close.widthAnchor.constraint(equalToConstant: 40), close.heightAnchor.constraint(equalToConstant: 40),
-            close.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 16),
-            close.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8),
-        ])
+        return web
     }
 
-    override func viewWillDisappear(_ animated: Bool) {
-        super.viewWillDisappear(animated)
+    func updateUIView(_ web: WKWebView, context: Context) {}
+
+    static func dismantleUIView(_ web: WKWebView, coordinator: ()) {
         web.evaluateJavaScript("document.querySelector('video')?.pause()")
     }
 }

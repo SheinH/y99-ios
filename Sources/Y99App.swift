@@ -12,6 +12,13 @@ struct Y99App: App {
     init() {
         // Animated WebP (the baked blobs) through ImageIO; GIF/APNG coders are registered by default.
         SDImageCodersManager.shared.addCoder(SDImageAWebPCoder.shared)
+        #if DEBUG
+        // Harness runs (seeded chats) never touch the network: only what's already cached shows.
+        let args = ProcessInfo.processInfo.arguments
+        if args.contains("-emojiPreview") || args.contains("-videoPreview") || args.contains("-rawSeed") {
+            URLProtocol.registerClass(NoNetwork.self)
+        }
+        #endif
         Task.detached(priority: .background) { DiskCache.trim() }   // keep media under 500 MB
         // Must be registered before launch finishes.
         BGTaskScheduler.shared.register(forTaskWithIdentifier: Notifier.refreshTask, using: nil) { task in
@@ -48,10 +55,6 @@ struct Y99App: App {
                         Msg(id: "1", text: "here's a clip", mine: false),
                         Msg(id: "2", text: "", mine: false, video: .local(url)),
                     ]) }
-                    .task {
-                        guard ProcessInfo.processInfo.arguments.contains("-autoplay") else { return }
-                        try? await Task.sleep(for: .seconds(2)); VideoPlayback.present(url)
-                    }
                 } else if session.auth == nil {
                     LoginView()
                 } else {
@@ -126,3 +129,15 @@ struct Y99App: App {
         }
     }
 }
+
+#if DEBUG
+/// Fails every web request (see Y99App.init): seeded harness runs must not contact y99's servers.
+final class NoNetwork: URLProtocol {
+    override class func canInit(with request: URLRequest) -> Bool {
+        ["http", "https", "ws", "wss"].contains(request.url?.scheme ?? "")
+    }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() { client?.urlProtocol(self, didFailWithError: URLError(.notConnectedToInternet)) }
+    override func stopLoading() {}
+}
+#endif
