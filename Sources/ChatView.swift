@@ -144,6 +144,9 @@ struct ChatView: View {
             if !seed.isEmpty {
                 messages = seed
                 #if DEBUG
+                loadRawSeed()
+                #endif
+                #if DEBUG
                 if ProcessInfo.processInfo.arguments.contains("-longSeed") {
                     messages = (1...40).map { Msg(id: "\($0)", text: "filler message \($0) :bg_hype:", mine: $0 % 3 == 0, serverId: $0) }
                         + (ProcessInfo.processInfo.arguments.firstIndex(of: "-imageSeed").flatMap { i in
@@ -550,11 +553,26 @@ struct ChatView: View {
     }
 
     /// Adds server messages to the thread; `persist` also stores them (off when they came from the store).
+    #if DEBUG
+    /// -rawSeed <json file>: real stored messages (a JSON array) through the normal parse path.
+    func loadRawSeed() {
+        let args = ProcessInfo.processInfo.arguments
+        guard let i = args.firstIndex(of: "-rawSeed"),
+              let data = try? Data(contentsOf: URL(fileURLWithPath: args[i + 1])),
+              let raw = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]] else { return }
+        messages = []
+        append(raw, persist: false)
+    }
+    #endif
+
     func append(_ arr: [[String: Any]], persist: Bool = true) {
         if persist && seed.isEmpty { Store.current?.save(chat: friend, arr) }
         for o in arr {
             let id = String(describing: o["id"] ?? UUID().uuidString)
-            let mine = (o["hunter"] as? String) == session.username
+            var mine = (o["hunter"] as? String) == session.username
+            #if DEBUG
+            if let i = ProcessInfo.processInfo.arguments.firstIndex(of: "-me") { mine = (o["hunter"] as? String) == ProcessInfo.processInfo.arguments[i + 1] }
+            #endif
             let n = Int(id)
             // Read/delivered flags on my messages count every time they arrive, also for messages
             // already on screen (a refresh brings updated flags for those).
