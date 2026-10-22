@@ -120,5 +120,13 @@ final class SocketManager: NSObject {
         if let delivered { info["delivered"] = delivered }
         if let seen { info["seen"] = seen }
         NotificationCenter.default.post(name: .y99Seen, object: nil, userInfo: info)
+        // Keep it even if that chat isn't open, so its Read/Delivered status is right when it opens.
+        Task { @MainActor in
+            guard let store = Store.current else { return }
+            var st = store.state(chat: target)
+            st.deliveredId = max(st.deliveredId, delivered ?? 0, seen ?? 0)
+            st.readId = max(st.readId, seen ?? 0)
+            store.save(chat: target, state: st)
+        }
     }
 }
