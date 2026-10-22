@@ -129,14 +129,7 @@ struct ChatView: View {
             if ProcessInfo.processInfo.arguments.contains("-focusLater") {
                 Task { try? await Task.sleep(for: .seconds(2)); typing = true }
             }
-            if ProcessInfo.processInfo.arguments.contains("-fakeTyping") {
-                // Partner typing at 2s, then "my" keystrokes every 0.4s.
-                Task {
-                    try? await Task.sleep(for: .seconds(2)); setPartnerTyping(true)
-                    try? await Task.sleep(for: .seconds(3))
-                    for c in "hello there friend" { try? await Task.sleep(for: .seconds(0.4)); draft.append(c) }
-                }
-            }
+            debugScripts()
             if ProcessInfo.processInfo.arguments.contains("-showEmojiPanel") {
                 Task { try? await Task.sleep(for: .seconds(2)); showingEmoji = true; typing = true }
             }
@@ -552,8 +545,31 @@ struct ChatView: View {
                                                       markedSeen: markedSeen, draft: draft))
     }
 
-    /// Adds server messages to the thread; `persist` also stores them (off when they came from the store).
     #if DEBUG
+    /// Scripted input for simulator checks: -fakeDictation, -fakeTyping.
+    func debugScripts() {
+            if ProcessInfo.processInfo.arguments.contains("-fakeDictation") {
+                // Text arriving like dictation: whole words at a time, the in-progress tail rewritten.
+                Task {
+                    try? await Task.sleep(for: .seconds(2))
+                    let words = "so I was thinking that we could maybe go out to get some food later tonight if you are not too tired from work and then we can watch a movie or something and honestly I would really love that because it has been such a long week and I miss you a lot so please let me know what you think about all of this okay".split(separator: " ")
+                    var done = ""
+                    for w in words {
+                        draft = done + String(w.prefix(2)); try? await Task.sleep(for: .seconds(0.12))
+                        done += w + " "; draft = done; try? await Task.sleep(for: .seconds(0.12))
+                    }
+                }
+            }
+            if ProcessInfo.processInfo.arguments.contains("-fakeTyping") {
+                // Partner typing at 2s, then "my" keystrokes every 0.4s.
+                Task {
+                    try? await Task.sleep(for: .seconds(2)); setPartnerTyping(true)
+                    try? await Task.sleep(for: .seconds(3))
+                    for c in "hello there friend" { try? await Task.sleep(for: .seconds(0.4)); draft.append(c) }
+                }
+            }
+    }
+
     /// -rawSeed <json file>: real stored messages (a JSON array) through the normal parse path.
     func loadRawSeed() {
         let args = ProcessInfo.processInfo.arguments
@@ -565,6 +581,7 @@ struct ChatView: View {
     }
     #endif
 
+    /// Adds server messages to the thread; `persist` also stores them (off when they came from the store).
     func append(_ arr: [[String: Any]], persist: Bool = true) {
         if persist && seed.isEmpty { Store.current?.save(chat: friend, arr) }
         for o in arr {
