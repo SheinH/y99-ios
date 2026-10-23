@@ -50,6 +50,8 @@ struct ChatView: View {
     @State private var avatarSource = SourceFrame(cornerRadius: 22)   // the header avatar, for the viewer's drag-close
     @State private var reporter: TypingReporter?   // our typing -> partner
     @State private var partnerTyping = false
+    @State private var morphingId: String?   // their new message, shown growing out of the typing bubble
+    @State private var morphRevealed = false
     @State private var partnerTypingEnds: Task<Void, Never>?
     @State private var partnerState: String?   // y99's partner_state: "Online", "5 minutes ago", …
     /// Each chat's last partner_state this launch, shown on reopening until y99 answers again.
@@ -71,7 +73,9 @@ struct ChatView: View {
                 // itself up with the screen's corner, which scrolled sideways by the padding (16 pt, 8 pt).
                 LazyVStack(spacing: 0) {
                     Color.clear.frame(height: 8)
-                    if partnerTyping { TypingBubble().padding(.top, 10).padding(.horizontal, 16).flipped().transition(.opacity) }
+                    if partnerTyping || morphingId != nil {
+                        incomingSlot.padding(.horizontal, 16).flipped().transition(.opacity)
+                    }
                     // Recordings sent without review, still being transcribed (newest at the bottom).
                     ForEach(voiceSends.jobs(chat: friend).reversed()) { job in
                         voiceBubble(job).padding(.top, 10).padding(.horizontal, 16).flipped()
@@ -80,14 +84,8 @@ struct ChatView: View {
                     // Identify rows by message id, not position: history inserts shift positions, which
                     // would hand a row (and its in-flight image load) to a different message.
                     ForEach(Array(messages.enumerated()).reversed(), id: \.element.id) { i, m in
-                        // Group runs from the same sender: tight spacing inside a run, tail on its last bubble.
-                        let startsRun = i == 0 || messages[i - 1].mine != m.mine
-                        let endsRun = i == messages.count - 1 || messages[i + 1].mine != m.mine
-                        bubble(m, tail: endsRun, showStatus: i == lastMine)
-                            .shiftProbe("row \(m.id) \(m.video != nil ? "video" : m.image != nil ? "image" : String(m.text.prefix(20)))")
-                            .padding(.top, startsRun ? 10 : 2)
-                            .padding(.horizontal, 16)
-                            .flipped()
+                        // While it grows out of the typing bubble, that bubble shows it instead.
+                        if m.id != morphingId { row(i, m, lastMine: lastMine) }
                     }
                     // Reaching the far end (oldest loaded) pages in older history. A ZStack, not a Group: a
                     // Group's onAppear fires per child, so every spinner -> clear swap re-ran it, retrying a
@@ -296,6 +294,65 @@ struct ChatView: View {
         DebugLog.log("partner_state \(friend): \(raw)")
         partnerState = s
         Self.knownStates[friend] = s
+    }
+
+    /// One message in the thread. Runs from the same sender group: tight spacing inside a run, tail on its last bubble.
+    func row(_ i: Int, _ m: Msg, lastMine: Int?) -> some View {
+        let startsRun = i == 0 || messages[i - 1].mine != m.mine
+        let endsRun = i == messages.count - 1 || messages[i + 1].mine != m.mine
+        return bubble(m, tail: endsRun, showStatus: i == lastMine)
+            .shiftProbe("row \(m.id) \(m.video != nil ? "video" : m.image != nil ? "image" : String(m.text.prefix(20)))")
+            .padding(.top, startsRun ? 10 : 2)
+            .padding(.horizontal, 16)
+            .flipped()
+    }
+
+    /// Their message replaces the typing bubble. A text message that's now the newest grows out of it:
+    /// the bubble resizes to the message while the dots fade into the text, then the normal row takes over
+    /// in the same spot. Anything else just swaps in, unanimated (fading the typing bubble out next to the
+    /// new row made the thread jump tall for a moment).
+    func theirMessageArrived(_ ids: Set<String>) {
+        guard partnerTyping, morphingId == nil else { return }
+        partnerTypingEnds?.cancel()
+        guard let last = messages.last, ids.contains(last.id), last.image == nil, last.video == nil,
+              voiceSends.jobs(chat: friend).isEmpty else {
+            partnerTyping = false
+            return
+        }
+        morphingId = last.id   // same frame: the typing bubble still shows; the row stays hidden
+        partnerTyping = false
+        Task { @MainActor in
+            withAnimation(.spring(duration: 0.4, bounce: 0.15)) { morphRevealed = true }
+            try? await Task.sleep(for: .seconds(0.45))
+            morphingId = nil   // hand over to the row, which lays out exactly where the slot was
+            morphRevealed = false
+        }
+    }
+
+    /// The typing bubble, or (just after their message arrives) that message growing out of it. Laid out
+    /// like a row from `bubble`, so the hand-over doesn't move anything.
+    @ViewBuilder var incomingSlot: some View {
+        let i = morphingId.flatMap { id in messages.firstIndex { $0.id == id } }
+        let m = i.flatMap { morphRevealed ? messages[$0] : nil }
+        HStack {
+            ZStack(alignment: .topLeading) {
+                if let m {
+                    MessageText(text: m.text)
+                        .padding(.horizontal, 14).padding(.vertical, 8)
+                        .tint(.accentColor)
+                        .transition(.opacity)
+                } else {
+                    TypingDots()
+                        .padding(.horizontal, 14).padding(.vertical, 13)
+                        .transition(.opacity)
+                }
+            }
+            .clipped()   // the text shows only as far as the bubble has grown
+            .background(BubbleShape(mine: false, tail: true).fill(Color(.systemGray5)))
+            Spacer(minLength: 60)
+        }
+        // A message continuing their run sits closer to the one before, like its row will.
+        .padding(.top, i.map { $0 > 0 && !messages[$0 - 1].mine && morphRevealed ? 2 : 10 } ?? 10)
     }
 
     /// Like the web, a "typing" shows for at most 10 s unless it's repeated; "stopped" or a message ends it.
@@ -747,6 +804,8 @@ struct ChatView: View {
     /// Adds server messages to the thread; `persist` also stores them (off when they came from the store).
     func append(_ arr: [[String: Any]], persist: Bool = true) {
         if persist && seed.isEmpty { Store.current?.save(chat: friend, arr) }
+        var theirsArrived: Set<String> = []
+        defer { if !theirsArrived.isEmpty { theirMessageArrived(theirsArrived) } }
         for o in arr {
             let id = String(describing: o["id"] ?? UUID().uuidString)
             var mine = (o["hunter"] as? String) == session.username
@@ -773,7 +832,7 @@ struct ChatView: View {
             }
             guard let text = o["message"] as? String else { continue }
             seen.insert(id)
-            if !mine && partnerTyping { setPartnerTyping(false) }
+            if !mine { theirsArrived.insert(id) }
             // type "image" carries the upload path in `message` (deob/app.deob.js:8427); type "attachment"
             // (message "[ATTACHMENT]") names a file on the storage server in `attachmentId` (deob ~52432).
             var image = (o["type"] as? String) == "image" ? ImageSource.remote(path: text) : nil

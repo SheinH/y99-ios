@@ -44,6 +44,16 @@ import SwiftUI
 
 // Three pulsing dots in an incoming bubble while the other person is typing.
 struct TypingBubble: View {
+    var body: some View {
+        TypingDots()
+            .padding(.horizontal, 14).padding(.vertical, 13)
+            .background(BubbleShape(mine: false, tail: true).fill(Color(.systemGray5)))
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// The animated "…" inside the typing bubble.
+struct TypingDots: View {
     // A symbol effect rather than a per-frame redraw: the animation runs on its own without
     // re-rendering (and re-laying out) the thread 60-120 times a second.
     var body: some View {
@@ -52,9 +62,6 @@ struct TypingBubble: View {
             .symbolEffect(.variableColor.iterative.dimInactiveLayers.nonReversing, options: .repeating)
             .foregroundStyle(.secondary)
             .frame(width: 34, height: 8)
-            .padding(.horizontal, 14).padding(.vertical, 13)
-            .background(BubbleShape(mine: false, tail: true).fill(Color(.systemGray5)))
-            .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityLabel("Typing")
     }
 }
