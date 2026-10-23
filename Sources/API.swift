@@ -131,10 +131,11 @@ enum API {
         }
     }
 
-    /// URLError codes that mean the request never got to the server.
+    /// URLError codes that mean the request never got to the server: it failed finding or connecting to
+    /// it. "Not connected to the internet" isn't one: iOS also reports it when the radio drops after the
+    /// request went out (seen on a real duplicate), so it counts as unknown.
     static let neverSent: Set<URLError.Code> = [
-        .notConnectedToInternet, .cannotFindHost, .cannotConnectToHost, .dnsLookupFailed,
-        .dataNotAllowed, .internationalRoamingOff, .callIsActive, .secureConnectionFailed,
+        .cannotFindHost, .cannotConnectToHost, .dnsLookupFailed, .secureConnectionFailed,
         .serverCertificateUntrusted, .appTransportSecurityRequiresSecureConnection,
     ]
 }

@@ -15,6 +15,7 @@ struct Y99App: App {
         #if DEBUG
         // Harness runs (seeded chats) never touch the network: only what's already cached shows.
         let args = ProcessInfo.processInfo.arguments
+        if Self.outboxTesting { URLProtocol.registerClass(FakeY99.self) }   // the outbox test's fake y99
         if args.contains("-emojiPreview") || args.contains("-videoPreview") || args.contains("-rawSeed") {
             URLProtocol.registerClass(NoNetwork.self)
         }
@@ -36,11 +37,19 @@ struct Y99App: App {
             task.expirationHandler = { work.cancel() }
         }
     }
+    #if DEBUG
+    static let outboxTesting = ProcessInfo.processInfo.arguments.contains("-outboxTest")
+    #else
+    static let outboxTesting = false
+    #endif
+
     var body: some Scene {
         WindowGroup {
             Group {
                 #if DEBUG
-                if let i = ProcessInfo.processInfo.arguments.firstIndex(of: "-openChat"),
+                if Self.outboxTesting {
+                    Text("Outbox test running…").task { await OutboxTest.run() }
+                } else if let i = ProcessInfo.processInfo.arguments.firstIndex(of: "-openChat"),
                    i + 1 < ProcessInfo.processInfo.arguments.count {
                     // Opens a real chat directly (needs a saved session).
                     NavigationStack { ChatView(friend: ProcessInfo.processInfo.arguments[i + 1]) }
@@ -97,6 +106,7 @@ struct Y99App: App {
                 Text("You'll get a notification from Y99 Alerts when someone messages you while Y99 is closed.")
             }
             .onAppear {
+                guard !Self.outboxTesting else { return }
                 Connectivity.shared.start()
                 if let auth = session.auth {
                     SocketManager.shared.start(auth: auth)
@@ -107,7 +117,7 @@ struct Y99App: App {
                 }
             }
             .onChange(of: session.auth) {
-                guard let auth = session.auth else { return }
+                guard !Self.outboxTesting, let auth = session.auth else { return }
                 Whatsup.shared.start(auth: auth, username: session.username)
                 Notifier.shared.setUp()
                 Task { await EmojiStore.shared.prefetchAll() }
@@ -117,6 +127,7 @@ struct Y99App: App {
             }
             .onChange(of: phase) {
                 // Ping only while the app is on screen.
+                guard !Self.outboxTesting else { return }
                 if phase == .active { Connectivity.shared.start() } else if phase == .background { Connectivity.shared.stop() }
                 guard let auth = session.auth else { return }
                 switch phase {

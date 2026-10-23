@@ -29,6 +29,8 @@ struct OutboxEntry: Codable, Identifiable {
     var state: State = .waiting
     var lastTried: Date?
     var failures = 0           // failed attempts while online (offline time doesn't count)
+    var maybeSent: Bool?       // an earlier try may have reached y99: always check the chat before sending again
+    var checkAfter: Date?      // not before then: y99 can save a message a few seconds after the reply was lost
 
     var fileURL: URL? { file.map { Outbox.dir.appendingPathComponent($0) } }
 }
@@ -46,7 +48,7 @@ struct OutboxEntry: Codable, Identifiable {
     }()
 
     /// Failed attempts (while online) before giving up: with the 2→30 s backoff, about 10 minutes.
-    private static let maxFailures = 24
+    static var maxFailures = 24   // a var only so the DEBUG outbox test can give up sooner
 
     private var worker: Task<Void, Never>?
     private var woken = false
@@ -89,7 +91,7 @@ struct OutboxEntry: Codable, Identifiable {
     /// A failed message goes back into the queue in its original place.
     func retry(_ id: String) {
         guard var e = all().first(where: { $0.id == id }), e.state == .failed else { return }
-        e.state = .waiting
+        e.state = e.maybeSent == true ? .unconfirmed : .waiting   // never resend blind what may have arrived
         e.failures = 0
         save(e)
         kick()
@@ -128,7 +130,11 @@ struct OutboxEntry: Codable, Identifiable {
             if sentOne { await nap(0.5) }   // space out a queue flush: bursts draw Cloudflare captchas
             // Only one request is ever in flight, so a stored "sending" means the app died mid-send last
             // time: it may have gone through, so check before sending it again.
-            if e.state == .sending { e.state = .unconfirmed }
+            if e.state == .sending { e.state = .unconfirmed; e.maybeSent = true }
+            if e.state == .unconfirmed, let at = e.checkAfter, at > Date() {
+                await nap(at.timeIntervalSinceNow)
+                continue
+            }
 
             let result = await attempt(&e, store: store)
             guard Store.current === store else { return }   // signed out mid-send
@@ -137,11 +143,12 @@ struct OutboxEntry: Codable, Identifiable {
                 finish(e, msgId: msgId, store: store)
                 sentOne = true
             case .captcha:
-                e.state = .waiting
+                e.state = e.maybeSent == true ? .unconfirmed : .waiting
                 save(e)
                 waitingForCaptcha = true
             case .failed(let unconfirmed):
-                e.state = unconfirmed ? .unconfirmed : (e.state == .unconfirmed ? .unconfirmed : .waiting)
+                if unconfirmed { e.maybeSent = true; e.checkAfter = Date().addingTimeInterval(Self.checkDelay) }
+                e.state = e.maybeSent == true ? .unconfirmed : .waiting
                 // Lost the connection: not the message's fault. It waits for .y99Online without using up a try.
                 if !Connectivity.shared.isOnline { save(e); continue }
                 e.failures += 1
@@ -154,6 +161,9 @@ struct OutboxEntry: Codable, Identifiable {
 
     private enum Result { case sent(Int), captcha, failed(unconfirmed: Bool) }
 
+    /// How long after an unclear send to look for it in the chat.
+    private static let checkDelay: TimeInterval = 8
+
     private func attempt(_ e: inout OutboxEntry, store: Store) async -> Result {
         guard let auth = Self.auth() else { return .failed(unconfirmed: false) }
         let me = store.username
@@ -162,10 +172,12 @@ struct OutboxEntry: Codable, Identifiable {
 
         // It may already have gone through: look before sending again.
         if e.state == .unconfirmed {
-            switch await verify(e, me: me, auth: auth, store: store) {
+            let check = await verify(e, me: me, auth: auth, store: store)
+            log(e, "check: \(check)")
+            switch check {
             case .found(let id): return .sent(id)
             case .unreachable: return .failed(unconfirmed: true)
-            case .absent: break
+            case .absent: e.maybeSent = false   // not there after the wait: this send is the only copy
             }
         }
 
@@ -206,12 +218,19 @@ struct OutboxEntry: Codable, Identifiable {
                                             + [("attachment", "true"), ("attachmentId", e.attachmentId ?? "")], username: me)
         }
 
+        log(e, "send: " + { switch outcome {
+            case .reply(let json): return "reply " + ((json as? [String: Any]).map { $0.keys.sorted().joined(separator: ",") } ?? "not JSON")
+            case .notSent: return "never reached y99"
+            case .unknown: return "unknown (may have arrived)"
+        } }())
         switch outcome {
         case .reply(let json):
             let dict = json as? [String: Any]
             if dict?["delivery"] as? String == "delivered", let mid = dict?["msg_id"], let n = Int("\(mid)") { return .sent(n) }
             if dict?["miniIframe"] != nil { return .captcha }
-            return .failed(unconfirmed: false)   // y99 answered, but not with a delivery
+            if dict?["alert"] != nil { return .failed(unconfirmed: false) }   // y99 turned it down
+            // Anything else (an error page, a gateway timeout, odd JSON) may have come after y99 saved it.
+            return .failed(unconfirmed: true)
         case .notSent:
             return .failed(unconfirmed: false)
         case .unknown:
@@ -251,12 +270,23 @@ struct OutboxEntry: Codable, Identifiable {
     /// try (with slack for clock differences) and not already matched to an earlier entry. Unclear cases
     /// count as absent: a rare duplicate beats a lost message.
     private func verify(_ e: OutboxEntry, me: String, auth: String, store: Store) async -> Check {
-        let r = await API.postOutcome("private/fetch", ordered: [
-            ("target", e.chat), ("private_last", "2000000000"), ("pageUp", "1"), ("mode", "private"), ("auth", auth),
-        ], username: me)
-        guard case .reply(let json) = r, let arr = (json as? [String: Any])?["private"] as? [[String: Any]] else { return .unreachable }
-        store.save(chat: e.chat, arr)
         let since = (e.lastTried ?? .distantPast).timeIntervalSince1970 - 120
+        // Newest page first, then further back while pages are still newer than the send (the other
+        // person may have written a lot since), up to 5 pages.
+        var arr: [[String: Any]] = []
+        var cursor = 2_000_000_000
+        for _ in 0..<5 {
+            let r = await API.postOutcome("private/fetch", ordered: [
+                ("target", e.chat), ("private_last", String(cursor)), ("pageUp", "1"), ("mode", "private"), ("auth", auth),
+            ], username: me)
+            guard case .reply(let json) = r, let page = (json as? [String: Any])?["private"] as? [[String: Any]] else { return .unreachable }
+            store.save(chat: e.chat, page)
+            arr += page
+            let ids = page.compactMap { Int("\($0["id"] ?? "")") }
+            let dates = page.compactMap { Double("\($0["date"] ?? "")") }
+            guard page.count >= 20, let oldest = ids.min(), let oldestDate = dates.min(), oldestDate >= since else { break }
+            cursor = oldest
+        }
         let norm = { (s: String) in s.split(whereSeparator: \.isWhitespace).joined(separator: " ") }
         let match = arr.compactMap { o -> Int? in
             guard (o["hunter"] as? String) == me, let id = Int("\(o["id"] ?? "")"), !store.isConfirmed(id),
@@ -297,6 +327,10 @@ struct OutboxEntry: Codable, Identifiable {
 
     private func all() -> [OutboxEntry] {
         (Store.current?.outbox() ?? []).compactMap { try? JSONDecoder().decode(OutboxEntry.self, from: Data($0.utf8)) }
+    }
+
+    private func log(_ e: OutboxEntry, _ what: String) {
+        DebugLog.log("outbox \(e.id.prefix(8)) \(e.chat): \(what)")
     }
 
     private func save(_ e: OutboxEntry) {
