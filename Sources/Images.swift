@@ -548,15 +548,22 @@ struct ZoomableImage: UIViewRepresentable {
 final class SourceFrame {
     weak var view: UIView?
     private var stored = CGRect.zero
+    private var frozen: CGRect?
     var cornerRadius: CGFloat
     init(cornerRadius: CGFloat = 18) { self.cornerRadius = cornerRadius }
     var rect: CGRect {
         get {
+            if let frozen { return frozen }
             if let view, view.window != nil { return view.convert(view.bounds, to: nil) }
             return stored
         }
         set { stored = newValue }
     }
+
+    /// Call when opening the viewer from inside a sheet: iOS shrinks the sheet while the viewer covers it
+    /// and grows it back on close, so a live reading lands the picture too small. This keeps where the
+    /// thumbnail is at rest instead.
+    func freeze() { frozen = nil; frozen = rect }
 }
 
 /// Invisible view behind a thumbnail that tells its SourceFrame where it is.

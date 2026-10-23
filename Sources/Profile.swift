@@ -121,7 +121,11 @@ struct ProfileCard: View {
             .background(FrameProbe(frame: pictureSource))
             .contentShape(Rectangle())
             // Tap to view it full screen, zooming out of the card like the header's avatar does.
-            .onTapGesture { if picture != nil { viewingPicture = true } }
+            .onTapGesture {
+                guard picture != nil else { return }
+                pictureSource.freeze()   // before the sheet shrinks behind the viewer
+                viewingPicture = true
+            }
             .zoomSource("profilePicture", zoom)
             .fullScreenCover(isPresented: $viewingPicture) {
                 if let picture { ImageViewer(image: picture, source: pictureSource).zoomTransition("profilePicture", zoom) }
@@ -132,12 +136,12 @@ struct ProfileCard: View {
 
     @ViewBuilder func details(_ p: Profile) -> some View {
         // Name on the left, level on the right, like the web.
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
+        HStack(alignment: .center, spacing: 6) {
             Text(p.username).font(.title2.weight(.bold)).lineLimit(1).minimumScaleFactor(0.7)
             if p.verified { Image(systemName: "checkmark.seal.fill").foregroundStyle(.blue) }
             Spacer(minLength: 12)
             // "★ 121" like the web: a small SF star beside the number.
-            HStack(alignment: .firstTextBaseline, spacing: 3) {
+            HStack(alignment: .center, spacing: 3) {
                 Image(systemName: "star.fill").font(.footnote.weight(.semibold))
                 Text(p.level.map(String.init) ?? "N/A").font(.body.weight(.semibold))
             }
