@@ -78,7 +78,8 @@ struct ProfileCard: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 20) {
-                avatar
+                // No picture, no picture area: the card starts with the name.
+                if let picture { avatar(picture) }
                 Group {
                     if let profile {
                         details(profile)
@@ -90,6 +91,7 @@ struct ProfileCard: View {
                 }
                 .padding(.horizontal, 20)
             }
+            .padding(.top, picture == nil ? 32 : 0)   // clear of the grabber when the name is on top
             .padding(.bottom, 32)
         }
         .ignoresSafeArea(edges: .top)   // the picture runs right up to the card's top edge
@@ -106,29 +108,21 @@ struct ProfileCard: View {
     }
 
     /// Full-width square across the top of the card (the sheet's own corners round it).
-    var avatar: some View {
+    func avatar(_ picture: UIImage) -> some View {
         Color(.systemGray4)
             .aspectRatio(1, contentMode: .fit)
-            .overlay {
-                if let picture {
-                    Image(uiImage: picture).resizable().scaledToFill()
-                } else {
-                    Image(systemName: "person.fill").resizable().scaledToFit()
-                        .padding(90).foregroundStyle(.white)
-                }
-            }
+            .overlay { Image(uiImage: picture).resizable().scaledToFill() }
             .clipped()
             .background(FrameProbe(frame: pictureSource))
             .contentShape(Rectangle())
             // Tap to view it full screen, zooming out of the card like the header's avatar does.
             .onTapGesture {
-                guard picture != nil else { return }
                 pictureSource.freeze()   // before the sheet shrinks behind the viewer
                 viewingPicture = true
             }
             .zoomSource("profilePicture", zoom)
             .fullScreenCover(isPresented: $viewingPicture) {
-                if let picture { ImageViewer(image: picture, source: pictureSource).zoomTransition("profilePicture", zoom) }
+                if let picture = self.picture { ImageViewer(image: picture, source: pictureSource).zoomTransition("profilePicture", zoom) }
             }
             .accessibilityAddTraits(.isButton)
             .accessibilityLabel("Profile picture")
