@@ -322,9 +322,8 @@ struct ChatView: View {
             }
             .lineLimit(1)
         }
-        // 44 pt tall like the back button and the connection badge, with the same gap around the
-        // avatar on the left as above and below, so it follows the pill's round end.
-        .padding(.leading, 7).padding(.trailing, 12)
+        // 44 pt tall like the back button and the connection badge; the avatar fills the pill's round end.
+        .padding(.trailing, 14)
         .frame(height: 44)
         .glass(in: Capsule())
     }
@@ -341,7 +340,7 @@ struct ChatView: View {
                 if avatarImage != nil { viewingAvatar = true }
             }
         } label: {
-            AvatarView(thumb: friendThumb, full: avatarImage)
+            AvatarView(thumb: friendThumb, full: avatarImage, size: 44)
         }
         .buttonStyle(.plain)
         // Grows out of the avatar, like photos in the thread.
