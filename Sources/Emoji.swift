@@ -236,14 +236,14 @@ struct MessageText: View {
     var body: some View {
         let pieces = Emoji.pieces(HTMLText.decode(text))
         if pieces.allSatisfy({ if case .text = $0 { true } else { false } }) {
-            Text(pieces.map { if case .text(let s) = $0 { s } else { "" } }.joined())
+            Text(Linkify.attributed(pieces.map { if case .text(let s) = $0 { s } else { "" } }.joined()))
         } else {
             VStack(alignment: .leading, spacing: 2) {
                 ForEach(Array(lines(pieces).enumerated()), id: \.offset) { _, line in
                     FlowLayout {
                         ForEach(Array(line.enumerated()), id: \.offset) { _, token in
                             switch token {
-                            case .text(let s): Text(s)
+                            case .text(let s): Text(Linkify.attributed(s))
                             case .image(_, let url): EmojiImage(url: url)
                             }
                         }
@@ -269,6 +269,25 @@ struct MessageText: View {
             }
         }
         return lines
+    }
+}
+
+// Tappable, underlined links in message text (Text opens them in Safari via openURL).
+// "example.com" without a scheme is detected too and opens as http://.
+enum Linkify {
+    private static let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+
+    static func attributed(_ s: String) -> AttributedString {
+        var out = AttributedString(s)
+        guard let detector else { return out }
+        for match in detector.matches(in: s, range: NSRange(s.startIndex..., in: s)) {
+            guard let url = match.url, let r = Range(match.range, in: s),
+                  let lo = AttributedString.Index(r.lowerBound, within: out),
+                  let hi = AttributedString.Index(r.upperBound, within: out) else { continue }
+            out[lo..<hi].link = url
+            out[lo..<hi].underlineStyle = .single
+        }
+        return out
     }
 }
 

@@ -511,6 +511,7 @@ struct ChatView: View {
                     MessageText(text: m.text)
                         .padding(.horizontal, 14).padding(.vertical, 8)
                         .foregroundStyle(m.mine ? .white : .primary)
+                        .tint(m.mine ? .white : .accentColor)   // links stay visible on the blue bubble
                         .background(BubbleShape(mine: m.mine, tail: tail).fill(m.mine ? Color.accentColor : Color(.systemGray5)))
                 }
                 if !m.mine { Spacer(minLength: 60) }
