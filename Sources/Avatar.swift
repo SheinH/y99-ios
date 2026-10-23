@@ -34,7 +34,12 @@ enum Avatar {
         if let hit = await cachedFull(thumb) { return hit }
         let r = await API.post("system/users/profile", ["target": user], auth: auth, username: me)
         guard let big = (r as? [String: Any])?["avatar"] as? String, !big.isEmpty else { return nil }
-        return await decode(DiskCache.image(key: fullKey(thumb), url: url(big)))
+        return await full(thumb: thumb, big: big)
+    }
+
+    /// Full size when the profile's `avatar` link is already known (the profile card has it).
+    static func full(thumb: String, big: String) async -> UIImage? {
+        await decode(DiskCache.image(key: fullKey(thumb), url: url(big)))
     }
 
     private static func decode(_ data: Data?) async -> UIImage? {

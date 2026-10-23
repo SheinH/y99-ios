@@ -46,6 +46,7 @@ struct ChatView: View {
     @State private var friendThumbId = 0
     @State private var avatarImage: UIImage?     // full size, once fetched
     @State private var viewingAvatar = false
+    @State private var viewingProfile = false
     @State private var reporter: TypingReporter?   // our typing -> partner
     @State private var partnerTyping = false
     @State private var partnerTypingEnds: Task<Void, Never>?
@@ -311,21 +312,34 @@ struct ChatView: View {
     var header: some View {
         HStack(spacing: 8) {
             avatarButton
-            VStack(alignment: .leading, spacing: 0) {
-                Text(friend)
-                    .font(.subheadline.weight(.semibold))
-                Text(partnerLine ?? " ")   // the line is kept while unknown, so the name doesn't jump
-                    .font(.caption2)
-                    .foregroundStyle(partnerLine == "Online" ? Color.green : .secondary)   // green like the friends list's dot
-                    .contentTransition(.opacity)
-                    .animation(.easeInOut(duration: 0.2), value: partnerLine)
-            }
-            .lineLimit(1)
+            Button { viewingProfile = true } label: { nameAndStatus }
+                .buttonStyle(.plain)
+                .accessibilityHint("Shows their profile")
         }
         // 44 pt tall like the back button and the connection badge; the avatar fills the pill's round end.
         .padding(.trailing, 14)
         .frame(height: 44)
         .glass(in: Capsule())
+        .sheet(isPresented: $viewingProfile) {
+            // Partial height: on iOS 26 that's a Liquid Glass panel over a dimmed chat; tap above it to close.
+            ProfileCard(user: friend, thumb: friendThumb, full: avatarImage, auth: session.auth, me: session.username)
+                .presentationDetents([.fraction(0.85), .large])
+                .presentationDragIndicator(.visible)
+        }
+    }
+
+    var nameAndStatus: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(friend)
+                .font(.subheadline.weight(.semibold))
+            Text(partnerLine ?? " ")   // the line is kept while unknown, so the name doesn't jump
+                .font(.caption2)
+                .foregroundStyle(partnerLine == "Online" ? Color.green : .secondary)   // green like the friends list's dot
+                .contentTransition(.opacity)
+                .animation(.easeInOut(duration: 0.2), value: partnerLine)
+        }
+        .lineLimit(1)
+        .contentShape(Rectangle())
     }
 
     // Tap opens the full-size picture (fetched once per picture, then cached).
