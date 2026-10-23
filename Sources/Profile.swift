@@ -76,18 +76,20 @@ struct ProfileCard: View {
         ScrollView {
             VStack(spacing: 20) {
                 avatar
-                if let profile {
-                    details(profile)
-                } else if failed {
-                    Text("Couldn't load the profile.").foregroundStyle(.secondary).padding(.top, 20)
-                } else {
-                    ProgressView().padding(.top, 20)
+                Group {
+                    if let profile {
+                        details(profile)
+                    } else if failed {
+                        Text("Couldn't load the profile.").foregroundStyle(.secondary).padding(.top, 20)
+                    } else {
+                        ProgressView().padding(.top, 20)
+                    }
                 }
+                .padding(.horizontal, 20)
             }
-            .padding(.horizontal, 20)
-            .padding(.top, 28)
             .padding(.bottom, 32)
         }
+        .ignoresSafeArea(edges: .top)   // the picture runs right up to the card's top edge
         .task {
             if let p = await Profile.load(user, auth: auth, me: me) { profile = p } else { failed = true }
         }
@@ -95,33 +97,37 @@ struct ProfileCard: View {
             // Sharper than the thumb: the full size, cached per picture by Avatar.
             if picture == nil { picture = full }
             if picture == nil, let thumb { picture = await Avatar.cachedFull(thumb) }
-            if picture == nil, let thumb, let big = profile?.avatar { picture = await Avatar.full(thumb: thumb, big: big) }
+            if picture == nil, let thumb { picture = await Avatar.thumbImage(thumb) }   // blurry stand-in
+            if let thumb, let big = profile?.avatar, let hd = await Avatar.full(thumb: thumb, big: big) { picture = hd }
         }
     }
 
+    /// Full-width square across the top of the card (the sheet's own corners round it).
     var avatar: some View {
-        Group {
-            if let picture {
-                Image(uiImage: picture).resizable().scaledToFill()
-                    .frame(width: 140, height: 140).clipShape(Circle())
-            } else {
-                AvatarView(thumb: thumb, size: 140)
+        Color(.systemGray4)
+            .aspectRatio(1, contentMode: .fit)
+            .overlay {
+                if let picture {
+                    Image(uiImage: picture).resizable().scaledToFill()
+                } else {
+                    Image(systemName: "person.fill").resizable().scaledToFit()
+                        .padding(90).foregroundStyle(.white)
+                }
             }
-        }
-        .shadow(color: .black.opacity(0.15), radius: 12, y: 4)
+            .clipped()
     }
 
     @ViewBuilder func details(_ p: Profile) -> some View {
-        VStack(spacing: 6) {
-            HStack(spacing: 6) {
-                Text(p.username).font(.title2.weight(.bold))
-                if p.verified { Image(systemName: "checkmark.seal.fill").foregroundStyle(.blue) }
-            }
-            Label(p.level.map { "Level \($0)" } ?? "Level N/A", systemImage: "star.fill")
-                .font(.subheadline.weight(.semibold))
+        // Name on the left, level on the right, like the web.
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text(p.username).font(.title2.weight(.bold)).lineLimit(1).minimumScaleFactor(0.7)
+            if p.verified { Image(systemName: "checkmark.seal.fill").foregroundStyle(.blue) }
+            Spacer(minLength: 12)
+            Label(p.level.map { "\($0) Level" } ?? "N/A Level", systemImage: "star.fill")
+                .font(.headline)
                 .foregroundStyle(.blue)
+                .fixedSize()
         }
-        .multilineTextAlignment(.center)
 
         VStack(alignment: .leading, spacing: 18) {
             section(nil) { bio(p) }
