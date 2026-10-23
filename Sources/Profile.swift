@@ -71,6 +71,8 @@ struct ProfileCard: View {
     @State private var profile: Profile?
     @State private var failed = false
     @State private var picture: UIImage?
+    @State private var viewingPicture = false
+    @Namespace private var zoom
 
     var body: some View {
         ScrollView {
@@ -115,6 +117,15 @@ struct ProfileCard: View {
                 }
             }
             .clipped()
+            .contentShape(Rectangle())
+            // Tap to view it full screen, zooming out of the card like the header's avatar does.
+            .onTapGesture { if picture != nil { viewingPicture = true } }
+            .zoomSource("profilePicture", zoom)
+            .fullScreenCover(isPresented: $viewingPicture) {
+                if let picture { ImageViewer(image: picture).zoomTransition("profilePicture", zoom) }
+            }
+            .accessibilityAddTraits(.isButton)
+            .accessibilityLabel("Profile picture")
     }
 
     @ViewBuilder func details(_ p: Profile) -> some View {
@@ -123,11 +134,14 @@ struct ProfileCard: View {
             Text(p.username).font(.title2.weight(.bold)).lineLimit(1).minimumScaleFactor(0.7)
             if p.verified { Image(systemName: "checkmark.seal.fill").foregroundStyle(.blue) }
             Spacer(minLength: 12)
-            Label(p.level.map { "\($0) Level" } ?? "N/A Level", systemImage: "star.fill")
-                .font(.headline)
+            // One Text so the SF star and the number share a size, like the web's "★ 121".
+            Text("\(Image(systemName: "star.fill")) \(p.level.map(String.init) ?? "N/A")")
+                .font(.title3.weight(.semibold))
                 .foregroundStyle(.blue)
                 .fixedSize()
+                .accessibilityLabel("Level \(p.level.map(String.init) ?? "not available")")
         }
+        .padding(.horizontal, 14)   // lines up with the text inside the panels below
 
         VStack(alignment: .leading, spacing: 18) {
             section(nil) { bio(p) }
