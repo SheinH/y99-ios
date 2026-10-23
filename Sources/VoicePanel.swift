@@ -48,16 +48,6 @@ struct VoicePanel: View {
             HStack(spacing: 10) {
                 circleButton("trash", "Discard recording") { dictation.discard() }
                 Spacer()
-                // Feeling lucky: no review; the composer's back at once and the transcript goes out when ready.
-                Button { dictation.stopAndSend(chat: chat) } label: {
-                    Image(systemName: "arrow.up")
-                        .font(.system(size: 18, weight: .bold))
-                        .frame(width: 34, height: 34)
-                }
-                .buttonStyle(.glassProminentIfAvailable)
-                .buttonBorderShape(.circle)
-                .controlSize(.large)
-                .accessibilityLabel("Send without review")
                 Button { dictation.stop() } label: {
                     Image(systemName: "stop.fill")
                         .font(.system(size: 18))
@@ -68,6 +58,16 @@ struct VoicePanel: View {
                 .buttonBorderShape(.circle)
                 .controlSize(.large)
                 .accessibilityLabel("Stop and review")
+                // Bottom right, the most used. Feeling lucky: no review; the composer's back at once and the transcript goes out when ready.
+                Button { dictation.stopAndSend(chat: chat) } label: {
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: 18, weight: .bold))
+                        .frame(width: 34, height: 34)
+                }
+                .buttonStyle(.glassProminentIfAvailable)
+                .buttonBorderShape(.circle)
+                .controlSize(.large)
+                .accessibilityLabel("Send without review")
             }
         }
     }
