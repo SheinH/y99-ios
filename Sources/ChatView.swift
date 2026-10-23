@@ -49,6 +49,9 @@ struct ChatView: View {
     @State private var reporter: TypingReporter?   // our typing -> partner
     @State private var partnerTyping = false
     @State private var partnerTypingEnds: Task<Void, Never>?
+    @State private var partnerState: String?   // y99's partner_state: "Online", "5 minutes ago", …
+    /// Each chat's last partner_state this launch, shown on reopening until y99 answers again.
+    @MainActor static var knownStates: [String: String] = [:]
     @State private var atNewest = true   // scrolled to the newest message (the thread's start)
 
     @Namespace private var zoom
@@ -133,23 +136,11 @@ struct ChatView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .principal) {
-                HStack(spacing: 8) {
-                    avatarButton
-                    Text(friend)
-                        .font(.headline)
-                        .lineLimit(1)
-                }
-                // Same gap left of the avatar as above and below, so it follows the pill's round end.
-                .padding(.leading, 4).padding(.trailing, 10).padding(.vertical, 4)
-                .glass(in: Capsule())
+                header
             }
             ToolbarItem(placement: .topBarTrailing) { ConnectionBadge() }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .y99Message)) { note in
-            guard let o = note.userInfo as? [String: Any],
-                  (o["hunter"] as? String) == friend else { return }
-            append([o])
-        }
+        .onReceive(NotificationCenter.default.publisher(for: .y99Message)) { received($0) }
         .task {
             if reporter == nil { reporter = TypingReporter(target: friend) }
             #if DEBUG
@@ -198,6 +189,7 @@ struct ChatView: View {
                 append(store.messages(chat: friend, limit: 100), persist: false)
             }
             showOutbox()
+            restorePartnerState()
             Whatsup.shared.chat = .init(target: friend, privateLast: lastId) { dict in handle(dict) }
             Task { await refreshLatest() }
             Whatsup.shared.pollNow()
@@ -281,6 +273,29 @@ struct ChatView: View {
         deliveredId = max(deliveredId, n)
     }
 
+    /// A message pushed over the socket: this chat's goes into the thread.
+    func received(_ note: Notification) {
+        guard let o = note.userInfo as? [String: Any], (o["hunter"] as? String) == friend else { return }
+        append([o])
+        setPartnerState("Online")   // they just sent it
+    }
+
+    func restorePartnerState() { if partnerState == nil { partnerState = Self.knownStates[friend] } }
+
+    /// The header's status line: typing beats y99's state.
+    var partnerLine: String? { partnerTyping ? "typing…" : partnerState }
+
+    /// y99 sends the other person's state with whatsup and private/fetch for the open chat, as text it
+    /// shows as-is: "Online", "Typing...", or a last-seen time ("… ago"). Typing comes from the socket
+    /// instead (the web drops whatsup's "Typing..." too), so it's ignored here.
+    func setPartnerState(_ raw: String) {
+        let s = raw.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "...", with: "…")
+        guard !s.isEmpty, !s.lowercased().hasPrefix("typing"), s != partnerState else { return }
+        DebugLog.log("partner_state \(friend): \(raw)")
+        partnerState = s
+        Self.knownStates[friend] = s
+    }
+
     /// Like the web, a "typing" shows for at most 10 s unless it's repeated; "stopped" or a message ends it.
     func setPartnerTyping(_ on: Bool) {
         partnerTypingEnds?.cancel()
@@ -290,6 +305,28 @@ struct ChatView: View {
             try? await Task.sleep(for: .seconds(10))
             if !Task.isCancelled { withAnimation(.easeInOut(duration: 0.2)) { partnerTyping = false } }
         }
+    }
+
+    /// Avatar, name, and their status, in a pill.
+    var header: some View {
+        HStack(spacing: 8) {
+            avatarButton
+            VStack(alignment: .leading, spacing: 0) {
+                Text(friend)
+                    .font(.subheadline.weight(.semibold))
+                Text(partnerLine ?? " ")   // the line is kept while unknown, so the name doesn't jump
+                    .font(.caption2)
+                    .foregroundStyle(partnerLine == "Online" ? Color.green : .secondary)   // green like the friends list's dot
+                    .contentTransition(.opacity)
+                    .animation(.easeInOut(duration: 0.2), value: partnerLine)
+            }
+            .lineLimit(1)
+        }
+        // 44 pt tall like the back button and the connection badge, with the same gap around the
+        // avatar on the left as above and below, so it follows the pill's round end.
+        .padding(.leading, 7).padding(.trailing, 12)
+        .frame(height: 44)
+        .glass(in: Capsule())
     }
 
     // Tap opens the full-size picture (fetched once per picture, then cached).
@@ -539,6 +576,7 @@ struct ChatView: View {
 
     // The shared whatsup loop (Whatsup.swift) returns this thread's new messages in `private`.
     func handle(_ dict: [String: Any]) {
+        if let s = dict["partner_state"] as? String { setPartnerState(s) }
         if let arr = dict["private"] as? [[String: Any]] {
             let stored = Store.current?.newestId(chat: friend)
             append(arr)
@@ -607,6 +645,7 @@ struct ChatView: View {
         let r = await API.post("private/fetch", [
             "target": friend, "private_last": "2000000000", "pageUp": "1", "mode": "private",
         ], auth: session.auth, username: session.username)
+        if let s = (r as? [String: Any])?["partner_state"] as? String { setPartnerState(s) }
         guard let arr = (r as? [String: Any])?["private"] as? [[String: Any]], !arr.isEmpty else { return }
         append(arr)
         if let stored, let oldest = arr.compactMap({ Int("\($0["id"] ?? "")") }).min(), oldest > stored {
@@ -654,6 +693,9 @@ struct ChatView: View {
                         print("DISCARD phase now \(dictation.phase)")
                     }
                 }
+            }
+            if let i = ProcessInfo.processInfo.arguments.firstIndex(of: "-partnerState") {
+                setPartnerState(ProcessInfo.processInfo.arguments[i + 1])   // the header's status line
             }
             if ProcessInfo.processInfo.arguments.contains("-typingLoop") {
                 // Partner typing on for 2 s, off for 1.5 s, over and over.
