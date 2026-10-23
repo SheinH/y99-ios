@@ -47,6 +47,7 @@ struct ChatView: View {
     @State private var avatarImage: UIImage?     // full size, once fetched
     @State private var viewingAvatar = false
     @State private var viewingProfile = false
+    @State private var avatarSource = SourceFrame(cornerRadius: 22)   // the header avatar, for the viewer's drag-close
     @State private var reporter: TypingReporter?   // our typing -> partner
     @State private var partnerTyping = false
     @State private var partnerTypingEnds: Task<Void, Never>?
@@ -355,12 +356,13 @@ struct ChatView: View {
             }
         } label: {
             AvatarView(thumb: friendThumb, full: avatarImage, size: 44)
+                .background(FrameProbe(frame: avatarSource))
         }
         .buttonStyle(.plain)
         // Grows out of the avatar, like photos in the thread.
         .zoomSource("avatar", zoom)
         .fullScreenCover(isPresented: $viewingAvatar) {
-            if let avatarImage { ImageViewer(image: avatarImage).zoomTransition("avatar", zoom) }
+            if let avatarImage { ImageViewer(image: avatarImage, source: avatarSource).zoomTransition("avatar", zoom) }
         }
         .accessibilityLabel("\(friend)'s profile picture")
         .onChange(of: friendThumb) { avatarImage = nil }   // they changed it

@@ -304,6 +304,7 @@ struct ImageViewer: View {
                           else { dragProgress = p }
                       },
                       target: { source?.rect },
+                      targetRadius: { source?.cornerRadius ?? 18 },
                       onLanding: { withAnimation(.easeOut(duration: 0.3)) { landing = true } },
                       onClose: { landed in
                           // Landed on the thumbnail already: the system's zoom back would start over from
@@ -382,6 +383,7 @@ struct ZoomableImage: UIViewRepresentable {
     var onTap: () -> Void = {}
     var onDrag: (CGFloat) -> Void = { _ in }
     var target: () -> CGRect? = { nil }
+    var targetRadius: () -> CGFloat = { 18 }
     var onLanding: () -> Void = {}
     var onClose: (_ landed: Bool) -> Void = { _ in }
 
@@ -395,7 +397,7 @@ struct ZoomableImage: UIViewRepresentable {
         let v = h.zoom
         v.imageView.image = image
         v.onTap = onTap; v.onDrag = onDrag; v.onClose = onClose
-        v.target = target; v.onLanding = onLanding
+        v.target = target; v.targetRadius = targetRadius; v.onLanding = onLanding
     }
 
     // The close drag moves the whole zoom view, so it lives in a plain holder that SwiftUI sizes.
@@ -417,6 +419,7 @@ struct ZoomableImage: UIViewRepresentable {
         var onTap: () -> Void = {}
         var onDrag: (CGFloat) -> Void = { _ in }
         var target: () -> CGRect? = { nil }   // the thumbnail, in window coordinates
+        var targetRadius: () -> CGFloat = { 18 }
         var onLanding: () -> Void = {}
         var onClose: (_ landed: Bool) -> Void = { _ in }
         private let closeDistance: CGFloat = 140
@@ -505,19 +508,28 @@ struct ZoomableImage: UIViewRepresentable {
             let k = min(bounds.width / size.width, bounds.height / size.height)
             let fit = CGRect(x: bounds.midX - size.width * k / 2, y: bounds.midY - size.height * k / 2,
                              width: size.width * k, height: size.height * k)
-            let s = dest.width / fit.width
+            // A thumbnail cropped to another shape (a round avatar, a square) gets the same crop: the middle
+            // of the picture in the thumbnail's aspect ratio. For a photo bubble that's the whole picture.
+            var crop = fit
+            let aspect = dest.width / dest.height
+            if fit.width / fit.height > aspect { crop.size.width = fit.height * aspect } else { crop.size.height = fit.width / aspect }
+            crop.origin = CGPoint(x: fit.midX - crop.width / 2, y: fit.midY - crop.height / 2)
+            let s = dest.width / crop.width
             // The transform works around this view's center: scale first, then move.
-            let tx = dest.midX - center.x - s * (fit.midX - bounds.midX)
-            let ty = dest.midY - center.y - s * (fit.midY - bounds.midY)
+            let tx = dest.midX - center.x - s * (crop.midX - bounds.midX)
+            let ty = dest.midY - center.y - s * (crop.midY - bounds.midY)
+            let radius = targetRadius()
             landing = true
             isUserInteractionEnabled = false
             imageView.frame = fit
+            imageView.contentMode = .scaleAspectFill   // same look at `fit`; crops as the frame narrows
             imageView.clipsToBounds = true
-            imageView.layer.cornerCurve = .continuous
+            imageView.layer.cornerCurve = radius >= min(dest.width, dest.height) / 2 - 0.5 ? .circular : .continuous
             onLanding()
             UIView.animate(withDuration: 0.32, delay: 0, usingSpringWithDamping: 1, initialSpringVelocity: 0) {
                 self.transform = CGAffineTransform(translationX: tx, y: ty).scaledBy(x: s, y: s)
-                self.imageView.layer.cornerRadius = 18 / s
+                self.imageView.frame = crop
+                self.imageView.layer.cornerRadius = radius / s
             } completion: { _ in self.onClose(true) }
         }
 
@@ -530,8 +542,34 @@ struct ZoomableImage: UIViewRepresentable {
     }
 }
 
-/// Where a thumbnail is on screen, kept current while its viewer is open.
-final class SourceFrame { var rect: CGRect = .zero }
+/// Where a thumbnail is on screen, kept current while its viewer is open. Set `rect` from
+/// onGeometryChange, or put a `FrameProbe` behind the thumbnail (reads the window position itself, which
+/// is right even inside a sheet). `cornerRadius` is the thumbnail's: a drag-close lands in that shape.
+final class SourceFrame {
+    weak var view: UIView?
+    private var stored = CGRect.zero
+    var cornerRadius: CGFloat
+    init(cornerRadius: CGFloat = 18) { self.cornerRadius = cornerRadius }
+    var rect: CGRect {
+        get {
+            if let view, view.window != nil { return view.convert(view.bounds, to: nil) }
+            return stored
+        }
+        set { stored = newValue }
+    }
+}
+
+/// Invisible view behind a thumbnail that tells its SourceFrame where it is.
+struct FrameProbe: UIViewRepresentable {
+    let frame: SourceFrame
+    func makeUIView(context: Context) -> UIView {
+        let v = UIView()
+        v.isUserInteractionEnabled = false
+        frame.view = v
+        return v
+    }
+    func updateUIView(_ v: UIView, context: Context) { frame.view = v }
+}
 
 extension View {
     // The Photos-style zoom from thumbnail to viewer needs iOS 18; earlier versions get the plain cover.

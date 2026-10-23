@@ -72,6 +72,7 @@ struct ProfileCard: View {
     @State private var failed = false
     @State private var picture: UIImage?
     @State private var viewingPicture = false
+    @State private var pictureSource = SourceFrame(cornerRadius: 0)   // for the viewer's drag-close
     @Namespace private var zoom
 
     var body: some View {
@@ -117,12 +118,13 @@ struct ProfileCard: View {
                 }
             }
             .clipped()
+            .background(FrameProbe(frame: pictureSource))
             .contentShape(Rectangle())
             // Tap to view it full screen, zooming out of the card like the header's avatar does.
             .onTapGesture { if picture != nil { viewingPicture = true } }
             .zoomSource("profilePicture", zoom)
             .fullScreenCover(isPresented: $viewingPicture) {
-                if let picture { ImageViewer(image: picture).zoomTransition("profilePicture", zoom) }
+                if let picture { ImageViewer(image: picture, source: pictureSource).zoomTransition("profilePicture", zoom) }
             }
             .accessibilityAddTraits(.isButton)
             .accessibilityLabel("Profile picture")
@@ -134,14 +136,16 @@ struct ProfileCard: View {
             Text(p.username).font(.title2.weight(.bold)).lineLimit(1).minimumScaleFactor(0.7)
             if p.verified { Image(systemName: "checkmark.seal.fill").foregroundStyle(.blue) }
             Spacer(minLength: 12)
-            // One Text so the SF star and the number share a size, like the web's "★ 121".
-            Text("\(Image(systemName: "star.fill")) \(p.level.map(String.init) ?? "N/A")")
-                .font(.title3.weight(.semibold))
-                .foregroundStyle(.blue)
-                .fixedSize()
-                .accessibilityLabel("Level \(p.level.map(String.init) ?? "not available")")
+            // "★ 121" like the web: a small SF star beside the number.
+            HStack(alignment: .firstTextBaseline, spacing: 3) {
+                Image(systemName: "star.fill").font(.footnote.weight(.semibold))
+                Text(p.level.map(String.init) ?? "N/A").font(.body.weight(.semibold))
+            }
+            .foregroundStyle(.blue)
+            .fixedSize()
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Level \(p.level.map(String.init) ?? "not available")")
         }
-        .padding(.horizontal, 14)   // lines up with the text inside the panels below
 
         VStack(alignment: .leading, spacing: 18) {
             section(nil) { bio(p) }
