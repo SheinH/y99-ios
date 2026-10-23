@@ -234,6 +234,10 @@ struct MessageText: View {
     let text: String
 
     var body: some View {
+        content.environment(\.openURL, OpenURLAction { Linkify.open($0) })
+    }
+
+    @ViewBuilder private var content: some View {
         let pieces = Emoji.pieces(HTMLText.decode(text))
         if pieces.allSatisfy({ if case .text = $0 { true } else { false } }) {
             Text(Linkify.attributed(pieces.map { if case .text(let s) = $0 { s } else { "" } }.joined()))
@@ -288,6 +292,33 @@ enum Linkify {
             out[lo..<hi].underlineStyle = .single
         }
         return out
+    }
+
+    /// YouTube links go to the YouTube app (its youtube:// scheme); if it isn't installed, the browser.
+    @MainActor static func open(_ url: URL) -> OpenURLAction.Result {
+        guard let app = youtubeApp(url) else { return .systemAction }
+        UIApplication.shared.open(app) { ok in if !ok { UIApplication.shared.open(url) } }
+        return .handled
+    }
+
+    /// youtube.com/…, m./music. and youtu.be/<id> links, rewritten for the app; nil for anything else.
+    static func youtubeApp(_ url: URL) -> URL? {
+        guard let host = url.host?.lowercased() else { return nil }
+        var c = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        c?.scheme = "youtube"
+        if host == "youtu.be" || host == "www.youtu.be" {
+            let id = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            guard !id.isEmpty else { return nil }
+            c?.host = "www.youtube.com"
+            c?.path = "/watch"
+            let rest = (c?.queryItems ?? []).filter { $0.name != "v" }   // e.g. t= start time
+            c?.queryItems = [URLQueryItem(name: "v", value: id)] + rest
+        } else if host == "youtube.com" || host.hasSuffix(".youtube.com") {
+            c?.host = "www.youtube.com"
+        } else {
+            return nil
+        }
+        return c?.url
     }
 }
 
