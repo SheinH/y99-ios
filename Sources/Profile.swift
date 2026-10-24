@@ -93,6 +93,7 @@ struct ProfileCard: View {
             }
             .padding(.top, picture == nil ? 32 : 0)   // clear of the grabber when the name is on top
             .padding(.bottom, 32)
+            .background(NoBounce())
         }
         .ignoresSafeArea(edges: .top)   // the picture runs right up to the card's top edge
         .task {
@@ -248,6 +249,22 @@ struct BadgeImage: View {
             let data = await DiskCache.image(key: "badge:\(img)", url: Profile.badgeURL(img))
             image = data.flatMap(UIImage.init(data:))
             done = true
+        }
+    }
+}
+
+/// Switches off the enclosing scroll view's bounce (SwiftUI has no setting for it),
+/// so the card can't overscroll into blank space.
+struct NoBounce: UIViewRepresentable {
+    func makeUIView(context: Context) -> Probe { Probe() }
+    func updateUIView(_ uiView: Probe, context: Context) {}
+
+    final class Probe: UIView {
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            var v = superview
+            while let s = v, !(s is UIScrollView) { v = s.superview }
+            (v as? UIScrollView)?.bounces = false
         }
     }
 }
