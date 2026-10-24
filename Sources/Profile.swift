@@ -93,6 +93,7 @@ struct ProfileCard: View {
             }
             .padding(.top, picture == nil ? 32 : 0)   // clear of the grabber when the name is on top
             .padding(.bottom, 32)
+            .background(NoTopBounce())
         }
         .ignoresSafeArea(edges: .top)   // the picture runs right up to the card's top edge
         .task {
@@ -248,6 +249,32 @@ struct BadgeImage: View {
             let data = await DiskCache.image(key: "badge:\(img)", url: Profile.badgeURL(img))
             image = data.flatMap(UIImage.init(data:))
             done = true
+        }
+    }
+}
+
+/// Turns off the enclosing scroll view's bounce while it's in its top half, so scrolling up stops
+/// at the top (the sheet takes the drag from there) instead of overshooting into blank space.
+/// The bottom keeps its bounce.
+struct NoTopBounce: UIViewRepresentable {
+    func makeUIView(context: Context) -> Probe { Probe() }
+    func updateUIView(_ uiView: Probe, context: Context) {}
+
+    final class Probe: UIView {
+        private var watch: NSKeyValueObservation?
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            guard window != nil, watch == nil else { return }
+            var v = superview
+            while let s = v, !(s is UIScrollView) { v = s.superview }
+            guard let scroll = v as? UIScrollView else { return }
+            watch = scroll.observe(\.contentOffset, options: [.initial, .new]) { s, _ in
+                let top = -s.adjustedContentInset.top
+                let bottom = s.contentSize.height + s.adjustedContentInset.bottom - s.bounds.height
+                let bounce = bottom > top && s.contentOffset.y > (top + bottom) / 2
+                if s.bounces != bounce { s.bounces = bounce }
+            }
         }
     }
 }
