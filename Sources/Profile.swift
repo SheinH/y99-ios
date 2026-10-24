@@ -74,7 +74,6 @@ struct ProfileCard: View {
     @State private var viewingPicture = false
     @State private var pictureSource = SourceFrame(cornerRadius: 0)   // for the viewer's drag-close
     @Namespace private var zoom
-    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         ScrollView {
@@ -94,7 +93,6 @@ struct ProfileCard: View {
             }
             .padding(.top, picture == nil ? 32 : 0)   // clear of the grabber when the name is on top
             .padding(.bottom, 32)
-            .background(SheetScrollHandoff { dismiss() })
         }
         .ignoresSafeArea(edges: .top)   // the picture runs right up to the card's top edge
         .task {
@@ -250,93 +248,6 @@ struct BadgeImage: View {
             let data = await DiskCache.image(key: "badge:\(img)", url: Profile.badgeURL(img))
             image = data.flatMap(UIImage.init(data:))
             done = true
-        }
-    }
-}
-
-/// Makes the card's scroll view hand off to the sheet: no overscroll at the top, and a drag that
-/// scrolls back up to the top keeps going by moving the sheet itself (UIKit's sheet only takes a drag
-/// that starts at the top). Let go far or fast enough and it closes (or drops from large to the
-/// smaller size); otherwise it springs back. The bottom keeps its bounce.
-struct SheetScrollHandoff: UIViewRepresentable {
-    let close: () -> Void
-
-    func makeUIView(context: Context) -> Probe { Probe() }
-    func updateUIView(_ uiView: Probe, context: Context) { uiView.close = close }
-
-    final class Probe: UIView {
-        var close: () -> Void = {}
-        private weak var scroll: UIScrollView?
-        private var watch: NSKeyValueObservation?
-        private var beganAtTop = false
-        private var anchor: CGFloat?   // finger translation when the content reached the top
-
-        override func didMoveToWindow() {
-            super.didMoveToWindow()
-            guard window != nil, scroll == nil else { return }
-            var v = superview
-            while let s = v, !(s is UIScrollView) { v = s.superview }
-            guard let scroll = v as? UIScrollView else { return }
-            self.scroll = scroll
-            // Bounce only in the bottom half, so the top never overshoots.
-            watch = scroll.observe(\.contentOffset, options: [.initial, .new]) { s, _ in
-                let top = -s.adjustedContentInset.top
-                let bottom = s.contentSize.height + s.adjustedContentInset.bottom - s.bounds.height
-                let bounce = bottom > top && s.contentOffset.y > (top + bottom) / 2
-                if s.bounces != bounce { s.bounces = bounce }
-            }
-            scroll.panGestureRecognizer.addTarget(self, action: #selector(pan))
-        }
-
-        private var sheet: UISheetPresentationController? {
-            var r: UIResponder? = self
-            while let n = r, !(n is UIViewController) { r = n.next }
-            var vc = r as? UIViewController
-            while let p = vc?.parent { vc = p }
-            return vc?.sheetPresentationController
-        }
-
-        @objc private func pan(_ g: UIPanGestureRecognizer) {
-            guard let s = scroll, let sheetView = sheet?.presentedView else { return }
-            let top = -s.adjustedContentInset.top
-            let t = g.translation(in: window).y
-            switch g.state {
-            case .began:
-                // Starting at the top, UIKit's own sheet drag handles it.
-                beganAtTop = s.contentOffset.y <= top + 0.5
-                anchor = nil
-            case .changed:
-                guard !beganAtTop else { return }
-                if anchor == nil, s.contentOffset.y <= top + 0.5, g.velocity(in: window).y > 0 { anchor = t }
-                guard let a = anchor else { return }
-                let extra = t - a
-                if extra <= 0 {
-                    anchor = nil
-                    sheetView.transform = .identity
-                } else {
-                    s.contentOffset.y = top   // the content holds still while the sheet moves
-                    sheetView.transform = CGAffineTransform(translationX: 0, y: extra)
-                }
-            case .ended, .cancelled, .failed:
-                defer { anchor = nil }
-                guard !beganAtTop, let a = anchor, t - a > 0 else { return }
-                let extra = t - a
-                let fling = g.state == .ended && (extra > 120 || g.velocity(in: window).y > 700)
-                if fling, let sheet, sheet.selectedDetentIdentifier == .large, sheet.detents.count > 1 {
-                    sheet.animateChanges {
-                        sheet.selectedDetentIdentifier = sheet.detents.first?.identifier
-                        sheetView.transform = .identity
-                    }
-                } else if fling {
-                    close()
-                } else {
-                    UIView.animate(withDuration: 0.35, delay: 0, usingSpringWithDamping: 0.85,
-                                   initialSpringVelocity: 0, options: [.allowUserInteraction]) {
-                        sheetView.transform = .identity
-                    }
-                }
-            default: break
-            }
         }
     }
 }
